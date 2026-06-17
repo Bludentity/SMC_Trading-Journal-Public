@@ -1,25 +1,14 @@
-# ⚡ SMC Backtest Journal — Architecture, Status & Deployment
+# SMC Backtest Journal
 
-This repository implements a production-ready Smart Money Concepts (SMC) Trading Journal that runs in three modes:
+This is my Smart Money Concepts (SMC) Trading Journal. It runs locally (Python), as a single-file Windows exe, or on Render.
 
-- Local development (run with Python)
-- Desktop single-file Windows executable (PyInstaller)
-- Cloud deployment (Render / Gunicorn)
+Prerequisites
+- Python 3.10+ (3.11/3.13 tested)
+- `pip` and a virtual environment
+- For Postgres: working `DATABASE_URL` and outbound access to the DB host on port 5432
 
-Core design choices
-- Database abstraction with SQLAlchemy Core so the same code works with SQLite (local) and PostgreSQL (cloud).
-- Configuration via `python-dotenv` — the app loads `.env` from the working directory or, for a bundled exe, from the exe folder.
-- Web server: Flask for UI + API routes; `gunicorn` recommended for production.
-
-Current status (most recent changes)
-- `database.py` replaced with a SQLAlchemy-based dual-database routing layer (auto-falls back to `smc_backtest.db` when `DATABASE_URL` is not set).
-- `build_desktop.py` helper added and used to produce `dist/SMC_Journal.exe` (single-file, no-console build).
-- `Procfile` and `render.yaml` added for simple Render deployment.
-- `requirements.txt` updated; added `pytz` and `psycopg2-binary` for Postgres support.
-
-## Quick Start — Local (Developer)
-
-1. Create and activate a virtual environment, then install dependencies:
+Local quick start
+1. Create a virtual environment and install deps:
 
 ```bash
 python -m venv .venv
@@ -28,35 +17,84 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-2. Start the app for development (launcher opens your browser):
+2. Start the app (launcher opens the UI in your browser):
 
 ```bash
 python launcher.py
 ```
 
-Open `http://127.0.0.1:5000` in your browser.
+3. Smoke test (confirm DB + server):
 
-## Desktop (Single EXE)
+```bash
+python -c "from database import init_db, get_pairs; init_db(); print('Pairs:', get_pairs())"
+curl -i http://127.0.0.1:5000/
+```
 
-1. Build the exe from the project root (requires PyInstaller):
+Desktop build (Windows exe)
+- Build single-file exe (PyInstaller required):
 
 ```bash
 python build_desktop.py --icon icon.ico --name SMC_Journal
 ```
 
-2. Copy `dist/SMC_Journal.exe` to the folder where you want it to run (e.g., Desktop). If you want the exe to connect to a remote Postgres DB, place a `.env` file next to the exe containing `DATABASE_URL` and `SECRET_KEY`.
+- Place a `.env` next to `SMC_Journal.exe` to connect to Postgres at runtime. Example `.env`:
 
-Notes about `.env` and the exe
-- The frozen exe looks for `.env` in its folder. If `DATABASE_URL` is present it will attempt to connect to Postgres; otherwise it uses `smc_backtest.db`.
-- If you use OneDrive for Desktop, be aware that syncing secrets may expose them to the cloud — prefer a non-synced folder for sensitive `.env` files.
+```
+SECRET_KEY=replace-with-a-strong-secret
+DATABASE_URL=postgresql://user:password@host:5432/dbname?sslmode=require
+```
 
-## Cloud / Render Deployment
+Render deployment (direct, fast)
+Follow these exact steps to deploy from a GitHub repo to Render:
 
-Recommended start command (Render / production):
+1. Push this project to GitHub.
+2. In Render, create a new Web Service → Import from GitHub and select the repo/branch.
+3. Use these settings:
+	- Environment: `Python`
+	- Build command: `pip install -r requirements.txt`
+	- Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
+4. Add environment variables in Render dashboard:
+	- `DATABASE_URL` (Postgres connection string)
+	- `SECRET_KEY`
+5. Optionally include `render.yaml` in the repo — Render will use it when importing the service.
+
+Quick Render tips
+- Use `render logs <service-name>` or the dashboard to view runtime logs.
+- If DB connections fail, check DNS and outbound port 5432 from Render (Render generally has outbound DB access).
+
+Webhooks & API
+- `POST /webhook` accepts TradingView webhooks; payloads are queued in the DB for review in the UI.
+
+Environment behavior
+- If `DATABASE_URL` is set the app connects to Postgres; otherwise it creates and uses `smc_backtest.db` locally.
+- For the frozen exe, the app looks for `.env` in the exe folder.
+
+Troubleshooting
+- DNS/connection checks (PowerShell):
+
+```powershell
+nslookup <db-host>
+Test-NetConnection -ComputerName <db-host> -Port 5432
+tracert <db-host>
+```
+
+- Generate a secure `SECRET_KEY`:
 
 ```bash
-gunicorn --bind 0.0.0.0:$PORT app:app
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+Data import example
+
+```bash
+python - <<'PY'
+from database import import_tradingview_csv
+csv = open('sample.csv','r',encoding='utf-8').read()
+print(import_tradingview_csv(csv))
+PY
+```
+
+If you want this README adjusted for a different host or to include a Dockerfile, tell me what you prefer.
 
 Set the following environment variables in the service settings on Render:
 - `DATABASE_URL` — full SQLAlchemy/Postgres URL (e.g., `postgresql://user:pass@host:5432/dbname?sslmode=require`).
@@ -91,10 +129,3 @@ python -c "from app import app; print('Flask app OK:', app.name)"
 - `launcher.py` — Local launcher that opens browser and starts the app
 - `build_desktop.py` — PyInstaller build helper used to create `dist/SMC_Journal.exe`
 - `render.yaml`, `Procfile` — deployment helpers for Render
-
-## Next actions
-- Add your `DATABASE_URL` and `SECRET_KEY` to a `.env` (for local or cloud). For the desktop exe, put the `.env` next to `SMC_Journal.exe`.
-- If you want, I can: test your `DATABASE_URL` connectivity, produce a Dockerfile, or prepare a Render-ready configuration with secrets masked.
-
----
-If anything in this README is out of date for your environment, tell me what changed and I'll update it.
