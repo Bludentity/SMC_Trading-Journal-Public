@@ -381,7 +381,9 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-let allTrades = [];
+// Server can optionally embed initial trades to avoid a client-side fetch
+const INITIAL_TRADES = {{ initial_trades | default('null') | safe }};
+let allTrades = (typeof INITIAL_TRADES !== 'undefined' && INITIAL_TRADES) ? INITIAL_TRADES : [];
 let cachedLevels = [];   // [{id, level_name}]
 let cachedModules = [];  // [{id, module_name}]
 

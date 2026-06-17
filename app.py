@@ -26,7 +26,14 @@ VALID_OUTCOMES   = {"Win", "Loss", "Break-Even"}
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # Render the UI with initial trades embedded so the dashboard shows
+    # existing trades immediately on page load (useful when client-side
+    # fetches fail or when the exe environment differs).
+    try:
+        trades = get_all_trades()
+    except Exception:
+        trades = []
+    return render_template("index.html", initial_trades=json.dumps(trades))
 
 
 # ── Settings: Pairs ───────────────────────────────────────────────────────────
