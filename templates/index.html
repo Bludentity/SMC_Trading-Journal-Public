@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SMC Backtest Journal</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0f1117; color:#e2e8f0; font-family:'Inter',sans-serif; }
+
+  .tab-btn { color:#64748b; padding-bottom:8px; font-size:.875rem; background:none; border:none; cursor:pointer; }
+  .tab-btn.active { border-bottom:2px solid #6366f1; color:#a5b4fc; }
+
+  .field-label { display:block; font-size:.7rem; font-weight:700; color:#94a3b8; margin-bottom:4px; text-transform:uppercase; letter-spacing:.06em; }
+
+  input, select, textarea {
+    background:#1e2130; border:1px solid #2d3250; color:#e2e8f0;
+    border-radius:6px; padding:7px 10px; width:100%; font-size:.875rem;
+    transition:border-color .15s;
+  }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:#6366f1; }
+  input[type="date"] { color-scheme: dark; }
+
+  .btn-primary { background:#4f46e5; color:#fff; font-weight:600; padding:.5rem 1rem; border-radius:.5rem; font-size:.875rem; border:none; cursor:pointer; }
+  .btn-primary:hover { background:#6366f1; }
+  .btn-success { background:#047857; color:#fff; font-weight:600; padding:.5rem 1rem; border-radius:.5rem; font-size:.875rem; border:none; cursor:pointer; white-space:nowrap; }
+  .btn-success:hover { background:#059669; }
+  .btn-cyan { background:#0e7490; color:#fff; font-weight:600; padding:.5rem 1rem; border-radius:.5rem; font-size:.875rem; border:none; cursor:pointer; white-space:nowrap; }
+  .btn-cyan:hover { background:#0891b2; }
+  .btn-ghost { background:#334155; color:#e2e8f0; font-weight:600; padding:.5rem 1rem; border-radius:.5rem; font-size:.875rem; border:none; cursor:pointer; }
+  .btn-ghost:hover { background:#475569; }
+  .btn-danger { background:#b91c1c; color:#fff; font-size:.75rem; padding:.2rem .5rem; border-radius:.375rem; border:none; cursor:pointer; }
+  .btn-danger:hover { background:#dc2626; }
+  .btn-sm { padding:.25rem .6rem; font-size:.75rem; }
+
+  .card { background:#161b2e; border:1px solid #2d3250; border-radius:10px; }
+
+  .badge { font-size:.7rem; font-weight:700; padding:2px 8px; border-radius:999px; }
+  .badge-win  { background:#14532d; color:#86efac; }
+  .badge-loss { background:#7f1d1d; color:#fca5a5; }
+  .badge-be   { background:#1e3a5f; color:#93c5fd; }
+  .badge-import { background:#3b1f6e; color:#c4b5fd; }
+
+  .module-check label { cursor:pointer; display:flex; align-items:center; gap:6px; font-size:.8rem; color:#cbd5e1; padding:4px 0; }
+  .module-check input[type=checkbox] { width:auto; accent-color:#6366f1; flex-shrink:0; }
+
+  .zone-row { display:flex; align-items:center; gap:8px; padding:6px 10px; background:#1a2035; border-radius:6px; margin-bottom:4px; }
+  .zone-row label { font-size:.75rem; color:#94a3b8; white-space:nowrap; min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }
+  .zone-row select { flex:0 0 220px; font-size:.8rem; padding:4px 8px; }
+
+  .daily-badge { display:inline-block; background:#1e3a5f; color:#93c5fd; font-size:.7rem; font-weight:700; padding:2px 8px; border-radius:999px; margin-left:6px; }
+
+  ::-webkit-scrollbar { width:5px; }
+  ::-webkit-scrollbar-track { background:#0f1117; }
+  ::-webkit-scrollbar-thumb { background:#2d3250; border-radius:3px; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- TOP BAR -->
+<header style="background:#0f1117; border-bottom:1px solid #1e2a3a;" class="px-6 py-3 sticky top-0 z-40">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+      <span class="text-indigo-400 text-xl font-black tracking-tight">⚡ SMC Journal</span>
+      <span id="webhook-badge" class="hidden badge" style="background:#78350f;color:#fde68a;">0 Pending</span>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button onclick="openModal('trade-modal')" class="btn-primary">+ Add Trade</button>
+      <input type="file" id="tv-csv-input" accept=".csv" style="display:none;" onchange="handleCSVUpload(event)"/>
+      <button onclick="document.getElementById('tv-csv-input').click()" class="btn-cyan">📂 Import TV Logs</button>
+      <button onclick="showTab('settings')" class="btn-ghost">⚙ Settings</button>
+      <button onclick="exportAI()" class="btn-success">🤖 Export for AI</button>
+    </div>
+  </div>
+</header>
+
+<!-- TABS -->
+<nav class="flex gap-6 px-6 pt-4 border-b border-slate-800">
+  <button class="tab-btn active" onclick="showTab('journal')"  id="tab-journal">📒 Journal</button>
+  <button class="tab-btn"        onclick="showTab('webhook')"  id="tab-webhook">🔔 Webhook Queue</button>
+  <button class="tab-btn"        onclick="showTab('settings')" id="tab-settings">⚙ Settings</button>
+</nav>
+
+<!-- TOAST -->
+<div id="toast" class="fixed bottom-6 right-6 z-50 hidden px-5 py-3 rounded-lg text-sm font-semibold shadow-xl" style="max-width:420px;"></div>
+
+
+<!-- TAB: JOURNAL -->
+<div id="tab-content-journal" class="p-6">
+  <!-- Stats -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+    <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Total Trades</div><div class="text-xl font-bold text-white" id="stat-total">0</div></div>
+    <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Wins</div><div class="text-xl font-bold text-green-400" id="stat-wins">0</div></div>
+    <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Losses</div><div class="text-xl font-bold text-red-400" id="stat-losses">0</div></div>
+    <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Win Rate</div><div class="text-xl font-bold text-indigo-400" id="stat-wr">0%</div></div>
+    <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Net R</div><div class="text-xl font-bold" id="stat-netr">0.0R</div></div>
+  </div>
+  <!-- Table -->
+  <div class="card overflow-x-auto">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="border-b border-slate-700 text-slate-500 uppercase tracking-wide">
+          <th class="px-3 py-3 text-left">ID</th>
+          <th class="px-3 py-3 text-left">Pair</th>
+          <th class="px-3 py-3 text-left">TF</th>
+          <th class="px-3 py-3 text-left">Dir</th>
+          <th class="px-3 py-3 text-left">Session</th>
+          <th class="px-3 py-3 text-left">Time EAT</th>
+          <th class="px-3 py-3 text-left">Modules</th>
+          <th class="px-3 py-3 text-left">Entry Zones</th>
+          <th class="px-3 py-3 text-left">Reversal Zone</th>
+          <th class="px-3 py-3 text-right">Entry Px</th>
+          <th class="px-3 py-3 text-right">SL Px</th>
+          <th class="px-3 py-3 text-right">TP Px</th>
+          <th class="px-3 py-3 text-right">P_SL</th>
+          <th class="px-3 py-3 text-right">P_TP</th>
+          <th class="px-3 py-3 text-right">RR</th>
+          <th class="px-3 py-3 text-left">Outcome</th>
+          <th class="px-3 py-3 text-right">Net R</th>
+          <th class="px-3 py-3 text-right">MAE</th>
+          <th class="px-3 py-3 text-right">MFE</th>
+          <th class="px-3 py-3 text-left">Notes</th>
+          <th class="px-3 py-3"></th>
+        </tr>
+      </thead>
+      <tbody id="trade-tbody">
+        <tr><td colspan="21" class="text-center py-10 text-slate-600">No trades logged yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TAB: WEBHOOK QUEUE -->
+<div id="tab-content-webhook" class="p-6 hidden">
+  <div class="mb-4 flex items-center justify-between">
+    <h2 class="text-base font-bold text-slate-200">🔔 TradingView Webhook Queue</h2>
+    <button onclick="loadWebhookQueue()" class="btn-ghost btn-sm">↻ Refresh</button>
+  </div>
+  <div id="webhook-list" class="space-y-3">
+    <p class="text-slate-600 text-sm">No pending alerts.</p>
+  </div>
+</div>
+
+<!-- TAB: SETTINGS -->
+<div id="tab-content-settings" class="p-6 hidden">
+  <h2 class="text-base font-bold text-slate-200 mb-5">⚙ Settings</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+
+    <!-- Asset Pairs -->
+    <div class="card p-4">
+      <h3 class="text-sm font-bold text-indigo-400 mb-1">Asset Pairs</h3>
+      <p class="text-xs text-slate-500 mb-3">Controls the Pair dropdown on the trade form.</p>
+      <div class="flex gap-2 mb-3">
+        <input id="new-pair-input" type="text" placeholder="e.g. GBPUSD"/>
+        <button onclick="addSetting('pairs')" class="btn-primary btn-sm">Add</button>
+      </div>
+      <ul id="pairs-list" class="space-y-1 max-h-52 overflow-y-auto"></ul>
+    </div>
+
+    <!-- Timeframes -->
+    <div class="card p-4">
+      <h3 class="text-sm font-bold text-indigo-400 mb-1">Timeframes</h3>
+      <p class="text-xs text-slate-500 mb-3">Controls the Timeframe dropdown. Note: 1D hides session/time fields.</p>
+      <div class="flex gap-2 mb-3">
+        <input id="new-tf-input" type="text" placeholder="e.g. 1H"/>
+        <button onclick="addSetting('timeframes')" class="btn-primary btn-sm">Add</button>
+      </div>
+      <ul id="timeframes-list" class="space-y-1 max-h-52 overflow-y-auto"></ul>
+    </div>
+
+    <!-- Entry Modules -->
+    <div class="card p-4">
+      <h3 class="text-sm font-bold text-indigo-400 mb-1">Entry Modules</h3>
+      <p class="text-xs text-slate-500 mb-3">Controls the SMC Entry Modules checklist. Each checked module generates its own entry zone dropdown.</p>
+      <div class="flex gap-2 mb-3">
+        <input id="new-module-input" type="text" placeholder="e.g. ICT Silver Bullet"/>
+        <button onclick="addSetting('modules')" class="btn-primary btn-sm">Add</button>
+      </div>
+      <ul id="modules-list" class="space-y-1 max-h-52 overflow-y-auto"></ul>
+    </div>
+
+    <!-- SMC Landmarks & Reversal Zones -->
+    <div class="card p-4">
+      <h3 class="text-sm font-bold text-indigo-400 mb-1">SMC Landmarks &amp; Reversal Zones</h3>
+      <p class="text-xs text-slate-500 mb-3">Controls entry zone dropdowns per module AND the Actual Market Reversal Zone dropdown.</p>
+      <div class="flex gap-2 mb-3">
+        <input id="new-level-input" type="text" placeholder="e.g. Extreme OB - Mean Threshold"/>
+        <button onclick="addSetting('levels')" class="btn-primary btn-sm">Add</button>
+      </div>
+      <ul id="levels-list" class="space-y-1 max-h-52 overflow-y-auto"></ul>
+    </div>
+
+  </div>
+</div>
+
+<!-- TRADE MODAL -->
+<div id="trade-modal" class="fixed inset-0 z-50 hidden flex items-start justify-center pt-6 pb-6 px-4" style="background:rgba(0,0,0,0.78);">
+  <div class="card w-full max-w-3xl overflow-y-auto" style="max-height:94vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+      <h2 class="font-bold text-slate-100">Log New Trade</h2>
+      <button onclick="closeModal('trade-modal')" class="text-slate-500 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+
+    <form id="trade-form" onsubmit="submitTrade(event)" class="px-6 py-5 space-y-5">
+
+      <!-- Row 1: Pair / TF / Direction -->
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label class="field-label">Pair <span class="text-red-400">*</span></label>
+          <select id="f-pair" required><option value="">-- Select --</option></select>
+        </div>
+        <div>
+          <label class="field-label">Timeframe <span class="text-red-400">*</span></label>
+          <select id="f-tf" required onchange="handleTimeframeChange()"><option value="">-- Select --</option></select>
+        </div>
+        <div>
+          <label class="field-label">Direction <span class="text-red-400">*</span></label>
+          <select id="f-direction" required>
+            <option value="">-- Select --</option>
+            <option value="Bullish">Bullish / Long</option>
+            <option value="Bearish">Bearish / Short</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Row 2: Session / Execution Time / Outcome — dynamic for 1D -->
+      <div id="session-time-row" class="grid grid-cols-3 gap-4">
+        <div id="session-wrap">
+          <label class="field-label">Session <span class="text-red-400">*</span></label>
+          <select id="f-session">
+            <option value="">-- Select --</option>
+            <option>Asian</option>
+            <option>London</option>
+            <option>New York</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" id="exec-time-label">Execution Time (EAT) <span class="text-red-400">*</span></label>
+          <input id="f-exec-time" type="datetime-local"/>
+        </div>
+        <div>
+          <label class="field-label">Trade Outcome <span class="text-red-400">*</span></label>
+          <select id="f-outcome" required onchange="handleOutcomeChange()">
+            <option value="">-- Select --</option>
+            <option value="Win">Win</option>
+            <option value="Loss">Loss</option>
+            <option value="Break-Even">Break-Even</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- SMC Entry Modules -->
+      <div>
+        <label class="field-label">SMC Entry Modules <span class="text-red-400">*</span></label>
+        <div id="modules-checklist" class="card p-3 module-check grid grid-cols-1 sm:grid-cols-2 gap-1">
+          <p class="text-slate-600 text-xs col-span-2">Loading modules...</p>
+        </div>
+      </div>
+
+      <!-- Dynamic Entry Zones (generated per checked module) -->
+      <div id="entry-zones-wrap" class="hidden">
+        <label class="field-label">Dynamic Entry Zones
+          <span class="text-slate-500 normal-case font-normal ml-1" style="font-size:.65rem;">(one per checked module — N/A is fine)</span>
+        </label>
+        <div id="entry-zones-container"></div>
+      </div>
+
+      <!-- Actual Market Reversal Zone (hybrid) -->
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="field-label">Actual Market Reversal Zone</label>
+          <select id="f-reversal-zone">
+            <option value="">N/A</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Custom Reversal Zone Description (Text Override)</label>
+          <input id="f-reversal-custom" type="text" placeholder="e.g. Swept equal lows below 15M swing"/>
+        </div>
+      </div>
+
+      <!-- Exact Prices -->
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label class="field-label">Exact Entry Price</label>
+          <input id="f-entry-px" type="number" step="0.00001" placeholder="e.g. 2345.50"/>
+        </div>
+        <div>
+          <label class="field-label">Exact Stop Loss Price</label>
+          <input id="f-sl-px" type="number" step="0.00001" placeholder="e.g. 2338.00"/>
+        </div>
+        <div>
+          <label class="field-label">Exact Take Profit Price</label>
+          <input id="f-tp-px" type="number" step="0.00001" placeholder="e.g. 2390.00"/>
+        </div>
+      </div>
+
+      <!-- Planned Pips / RR -->
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label class="field-label">Planned SL (Pips) <span class="text-red-400">*</span></label>
+          <input id="f-sl" type="number" step="0.1" min="0" required placeholder="e.g. 30"/>
+        </div>
+        <div>
+          <label class="field-label">Planned TP (Pips) <span class="text-red-400">*</span></label>
+          <input id="f-tp" type="number" step="0.1" min="0" required placeholder="e.g. 150"/>
+        </div>
+        <div>
+          <label class="field-label">Planned R:R <span class="text-red-400">*</span></label>
+          <input id="f-rr" type="number" step="0.01" min="0" required placeholder="e.g. 5.0"/>
+        </div>
+      </div>
+
+      <!-- MAE / MFE -->
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="field-label" id="mae-label">Actual MAE — Max Drawdown (Pips)</label>
+          <input id="f-mae" type="number" step="0.1" min="0" placeholder="Pips into drawdown"/>
+          <p class="text-xs text-slate-500 mt-1" id="mae-hint"></p>
+        </div>
+        <div>
+          <label class="field-label" id="mfe-label">Actual MFE — Max Profit Reached (Pips)</label>
+          <input id="f-mfe" type="number" step="0.1" min="0" placeholder="Pips into profit"/>
+          <p class="text-xs text-slate-500 mt-1" id="mfe-hint"></p>
+        </div>
+      </div>
+
+      <!-- SL / TP Placement Descriptions -->
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="field-label">Stop Loss Placement Description</label>
+          <input id="f-sl-desc" type="text" placeholder="e.g. 2 pips below lower limit of 15M Extreme OF"/>
+        </div>
+        <div>
+          <label class="field-label">Take Profit Placement Description</label>
+          <input id="f-tp-desc" type="text" placeholder="e.g. At the major liquidity pool BOS high"/>
+        </div>
+      </div>
+
+      <!-- Entry / Reversal Notes -->
+      <div>
+        <label class="field-label">Entry &amp; Reversal Structural Notes</label>
+        <textarea id="f-entry-notes" rows="2" placeholder="Real-time tape reading: candle behaviour, zone mitigation speed, reaction momentum..."></textarea>
+      </div>
+
+      <!-- Final Outcome Notes -->
+      <div>
+        <label class="field-label">Final Outcome Notes</label>
+        <textarea id="f-notes" rows="2" placeholder="Post-trade retrospective: psychology, mistakes, key takeaways..."></textarea>
+      </div>
+
+      <!-- Error Box -->
+      <div id="form-errors" class="hidden rounded-lg p-3 text-xs text-red-200 space-y-1" style="background:#450a0a;border:1px solid #7f1d1d;"></div>
+
+      <!-- Actions -->
+      <div class="flex gap-3 pt-1">
+        <button type="submit" class="btn-primary flex-1">Save Trade</button>
+        <button type="button" onclick="closeModal('trade-modal')" class="btn-ghost flex-1">Cancel</button>
+      </div>
+
+    </form>
+  </div>
+</div>
+
+<!-- AI EXPORT MODAL -->
+<div id="ai-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center px-4" style="background:rgba(0,0,0,0.82);">
+  <div class="card w-full max-w-4xl flex flex-col" style="max-height:88vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+      <h2 class="font-bold text-emerald-400">🤖 AI Analysis Export Payload</h2>
+      <button onclick="closeModal('ai-modal')" class="text-slate-500 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+    <div class="px-6 py-4 flex-1 overflow-y-auto">
+      <textarea id="ai-payload" readonly style="background:#0a0e1a;border:1px solid #2d3250;border-radius:6px;padding:12px;line-height:1.6;width:100%;height:380px;font-family:monospace;font-size:.72rem;color:#6ee7b7;resize:none;"></textarea>
+    </div>
+    <div class="px-6 py-4 border-t border-slate-700 flex gap-3">
+      <button onclick="copyAIPayload()" class="btn-primary flex-1">📋 Copy to Clipboard</button>
+      <button onclick="closeModal('ai-modal')" class="btn-ghost">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allTrades = [];
+let cachedLevels = [];   // [{id, level_name}]
+let cachedModules = [];  // [{id, module_name}]
+
+// ── Utility ────────────────────────────────────────────────────────────────
+function toast(msg, ok=true) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = ok ? '#14532d' : '#7f1d1d';
+  el.style.color = '#fff';
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 4000);
+}
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path, opts);
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function showTab(name) {
+  ['journal','webhook','settings'].forEach(t => {
+    document.getElementById(`tab-content-${t}`).classList.toggle('hidden', t !== name);
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
+  });
+  if (name === 'webhook') loadWebhookQueue();
+  if (name === 'settings') loadAllSettings();
+}
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([populateFormDropdowns(), loadTrades()]);
+  pollWebhookBadge();
+  setInterval(pollWebhookBadge, 15000);
+}
+
+// ── Populate dropdowns ─────────────────────────────────────────────────────
+async function populateFormDropdowns() {
+  const [pairs, tfs, levels, modules] = await Promise.all([
+    api('/api/settings/pairs').then(r=>r.json()),
+    api('/api/settings/timeframes').then(r=>r.json()),
+    api('/api/settings/levels').then(r=>r.json()),
+    api('/api/settings/modules').then(r=>r.json()),
+  ]);
+  cachedLevels  = levels;
+  cachedModules = modules;
+
+  // Pair
+  const pSel = document.getElementById('f-pair');
+  pSel.innerHTML = '<option value="">-- Select --</option>' + pairs.map(p=>`<option value="${p}">${p}</option>`).join('');
+
+  // Timeframe
+  const tfSel = document.getElementById('f-tf');
+  tfSel.innerHTML = '<option value="">-- Select --</option>' + tfs.map(t=>`<option value="${t}">${t}</option>`).join('');
+
+  // Reversal zone dropdown
+  const rvSel = document.getElementById('f-reversal-zone');
+  rvSel.innerHTML = '<option value="">N/A</option>' + levels.map(l=>`<option value="${esc(l.level_name)}">${esc(l.level_name)}</option>`).join('');
+
+  // Modules checklist
+  const box = document.getElementById('modules-checklist');
+  if (!modules.length) { box.innerHTML = '<p class="text-slate-600 text-xs">No modules configured.</p>'; return; }
+  box.innerHTML = modules.map(m =>
+    `<div class="module-check">
+      <label>
+        <input type="checkbox" name="entry_module" value="${esc(m.module_name)}" onchange="rebuildEntryZones()"/>
+        ${esc(m.module_name)}
+      </label>
+    </div>`
+  ).join('');
+}
+
+// ── 1D Timeframe dynamic UI ────────────────────────────────────────────────
+function handleTimeframeChange() {
+  const tf = document.getElementById('f-tf').value.toUpperCase();
+  const isDaily = tf === '1D';
+  const sessionWrap  = document.getElementById('session-wrap');
+  const execInput    = document.getElementById('f-exec-time');
+  const execLabel    = document.getElementById('exec-time-label');
+
+  if (isDaily) {
+    // Hide session
+    sessionWrap.style.opacity = '0.3';
+    sessionWrap.style.pointerEvents = 'none';
+    document.getElementById('f-session').value = '';
+    // Switch datetime-local to date-only
+    execInput.type = 'date';
+    execLabel.innerHTML = 'Trade Date (EAT) <span class="text-red-400">*</span> <span class="daily-badge">1D — Date Only</span>';
+  } else {
+    sessionWrap.style.opacity = '1';
+    sessionWrap.style.pointerEvents = 'auto';
+    execInput.type = 'datetime-local';
+    execLabel.innerHTML = 'Execution Time (EAT) <span class="text-red-400">*</span>';
+  }
+}
+
+// ── Dynamic Entry Zones ────────────────────────────────────────────────────
+function rebuildEntryZones() {
+  const checked = [...document.querySelectorAll('input[name="entry_module"]:checked')].map(cb => cb.value);
+  const wrap    = document.getElementById('entry-zones-wrap');
+  const cont    = document.getElementById('entry-zones-container');
+
+  if (!checked.length) { wrap.classList.add('hidden'); cont.innerHTML = ''; return; }
+  wrap.classList.remove('hidden');
+
+  const levelOptions = '<option value="N/A">N/A (Not Applicable)</option>' +
+    cachedLevels.map(l => `<option value="${esc(l.level_name)}">${esc(l.level_name)}</option>`).join('');
+
+  cont.innerHTML = checked.map(mod => `
+    <div class="zone-row">
+      <label title="${esc(mod)}">${esc(mod)}</label>
+      <select name="zone_select" data-module="${esc(mod)}">${levelOptions}</select>
+    </div>`
+  ).join('');
+}
+
+// ── Outcome conditional logic ──────────────────────────────────────────────
+function handleOutcomeChange() {
+  const outcome = document.getElementById('f-outcome').value;
+  const maeL = document.getElementById('mae-label');
+  const mfeL = document.getElementById('mfe-label');
+  const maeH = document.getElementById('mae-hint');
+  const mfeH = document.getElementById('mfe-hint');
+  const maeI = document.getElementById('f-mae');
+  const mfeI = document.getElementById('f-mfe');
+
+  maeL.innerHTML = 'Actual MAE — Max Drawdown (Pips)';
+  mfeL.innerHTML = 'Actual MFE — Max Profit Reached (Pips)';
+  maeH.textContent = ''; mfeH.textContent = '';
+  maeI.required = false; mfeI.required = false;
+
+  if (outcome === 'Win') {
+    maeL.innerHTML = 'Actual MAE — Max Drawdown (Pips) <span style="color:#f87171">*</span>';
+    maeH.textContent = 'Required: how deep into drawdown before reversing to TP?';
+    maeI.required = true;
+    mfeH.textContent = 'Optional for Win.';
+  } else if (outcome === 'Loss') {
+    mfeL.innerHTML = 'Actual MFE — Max Profit Reached (Pips) <span style="color:#f87171">*</span>';
+    mfeH.textContent = 'Required: how far into profit before reversing to SL?';
+    mfeI.required = true;
+    const sl = document.getElementById('f-sl').value;
+    if (sl) { maeI.value = sl; maeH.textContent = 'Auto-filled from Planned SL. Override if needed.'; }
+  }
+}
+
+// ── Submit Trade ────────────────────────────────────────────────────────────
+async function submitTrade(e) {
+  e.preventDefault();
+
+  const outcome = document.getElementById('f-outcome').value;
+  if (outcome === 'Loss' && !document.getElementById('f-mae').value) {
+    document.getElementById('f-mae').value = document.getElementById('f-sl').value;
+  }
+
+  // Collect checked modules
+  const checkedModules = [...document.querySelectorAll('input[name="entry_module"]:checked')].map(cb => cb.value);
+
+  // Collect dynamic entry zones — skip N/A
+  const zoneSelects = [...document.querySelectorAll('select[name="zone_select"]')];
+  const dynamicZones = {};
+  zoneSelects.forEach(sel => {
+    if (sel.value && sel.value !== 'N/A') dynamicZones[sel.dataset.module] = sel.value;
+  });
+
+  // Execution time
+  const execRaw = document.getElementById('f-exec-time').value;
+  const tf = document.getElementById('f-tf').value.toUpperCase();
+  let execTime = null;
+  if (execRaw) {
+    execTime = tf === '1D' ? execRaw + ' 00:00:00' : execRaw.replace('T', ' ') + ':00';
+  }
+
+  const payload = {
+    pair:                  document.getElementById('f-pair').value,
+    timeframe:             document.getElementById('f-tf').value,
+    direction:             document.getElementById('f-direction').value,
+    session:               tf === '1D' ? null : document.getElementById('f-session').value,
+    execution_time:        execTime,
+    outcome,
+    entry_modules:         checkedModules,
+    dynamic_entry_zones:   dynamicZones,
+    actual_reversal_zone:  document.getElementById('f-reversal-zone').value || null,
+    actual_reversal_custom:document.getElementById('f-reversal-custom').value || null,
+    exact_entry_price:     document.getElementById('f-entry-px').value || null,
+    exact_sl_price:        document.getElementById('f-sl-px').value || null,
+    exact_tp_price:        document.getElementById('f-tp-px').value || null,
+    planned_sl_pips:       document.getElementById('f-sl').value,
+    planned_tp_pips:       document.getElementById('f-tp').value,
+    planned_rr:            document.getElementById('f-rr').value,
+    actual_mae_pips:       document.getElementById('f-mae').value || null,
+    actual_mfe_pips:       document.getElementById('f-mfe').value || null,
+    sl_placement_desc:     document.getElementById('f-sl-desc').value || null,
+    tp_placement_desc:     document.getElementById('f-tp-desc').value || null,
+    entry_reversal_notes:  document.getElementById('f-entry-notes').value || null,
+    notes:                 document.getElementById('f-notes').value || null,
+  };
+
+  const errBox = document.getElementById('form-errors');
+  errBox.classList.add('hidden');
+
+  const r = await api('/api/trades', 'POST', payload);
+  const data = await r.json();
+
+  if (!r.ok) {
+    errBox.innerHTML = (data.errors || [data.error || 'Unknown error']).map(e => `<div>• ${e}</div>`).join('');
+    errBox.classList.remove('hidden');
+    errBox.scrollIntoView({behavior:'smooth', block:'nearest'});
+    return;
+  }
+
+  toast('Trade saved successfully!');
+  closeModal('trade-modal');
+  document.getElementById('trade-form').reset();
+  document.querySelectorAll('input[name="entry_module"]').forEach(cb => cb.checked = false);
+  document.getElementById('entry-zones-container').innerHTML = '';
+  document.getElementById('entry-zones-wrap').classList.add('hidden');
+  handleOutcomeChange();
+  handleTimeframeChange();
+  await loadTrades();
+}
+
+// ── Load & Render Trades ───────────────────────────────────────────────────
+async function loadTrades() {
+  const r = await api('/api/trades');
+  allTrades = await r.json();
+  renderTradeTable(allTrades);
+  renderStats(allTrades);
+}
+
+function renderTradeTable(trades) {
+  const tbody = document.getElementById('trade-tbody');
+  if (!trades.length) {
+    tbody.innerHTML = '<tr><td colspan="21" class="text-center py-10 text-slate-600">No trades logged yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = trades.map(t => {
+    let mods = [];
+    try { mods = JSON.parse(t.entry_modules); } catch(e) {}
+
+    let zones = {};
+    try { zones = JSON.parse(t.dynamic_entry_zones || '{}'); } catch(e) {}
+    const zonesStr = Object.entries(zones).map(([m,l]) => `${m}: ${l}`).join(' | ') || '—';
+
+    const reversal = t.actual_reversal_custom || t.actual_reversal_zone || '—';
+
+    let eatDisplay = t.execution_time_eat || '—';
+    if (eatDisplay.length > 10) {
+      const parts = eatDisplay.split(' ');
+      eatDisplay = parts[1] ? parts[0] + ' ' + parts[1].slice(0,5) + ' EAT' : eatDisplay;
+    }
+
+    const badge = t.outcome === 'Win'
+      ? `<span class="badge badge-win">WIN</span>`
+      : t.outcome === 'Loss'
+      ? `<span class="badge badge-loss">LOSS</span>`
+      : t.entry_modules?.includes('Imported')
+      ? `<span class="badge badge-import">IMPORT</span>`
+      : `<span class="badge badge-be">B/E</span>`;
+
+    const netC = t.net_r > 0 ? 'color:#4ade80' : t.net_r < 0 ? 'color:#f87171' : 'color:#94a3b8';
+
+    return `<tr style="border-bottom:1px solid #1e2a3a;" onmouseover="this.style.background='#1a2035'" onmouseout="this.style.background=''">
+      <td class="px-3 py-2 text-slate-500">#${t.id}</td>
+      <td class="px-3 py-2 font-bold text-white">${t.pair}</td>
+      <td class="px-3 py-2 text-slate-300">${t.timeframe}</td>
+      <td class="px-3 py-2">${t.direction === 'Bullish' ? '🟢 Bull' : '🔴 Bear'}</td>
+      <td class="px-3 py-2 text-slate-400">${t.session || '<span style="color:#334155">—</span>'}</td>
+      <td class="px-3 py-2 text-slate-400" style="white-space:nowrap">${eatDisplay}</td>
+      <td class="px-3 py-2 text-slate-400 max-w-xs truncate" title="${esc(mods.join(', '))}">${esc(mods.join(', ')) || '—'}</td>
+      <td class="px-3 py-2 text-slate-500 max-w-xs truncate" title="${esc(zonesStr)}">${esc(zonesStr)}</td>
+      <td class="px-3 py-2 text-cyan-400 max-w-xs truncate" title="${esc(reversal)}">${esc(reversal)}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.exact_entry_price ?? '—'}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.exact_sl_price ?? '—'}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.exact_tp_price ?? '—'}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.planned_sl_pips}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.planned_tp_pips}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${t.planned_rr}</td>
+      <td class="px-3 py-2">${badge}</td>
+      <td class="px-3 py-2 text-right font-bold" style="${netC}">${t.net_r > 0 ? '+' : ''}${t.net_r}R</td>
+      <td class="px-3 py-2 text-right" style="color:#fb923c">${t.actual_mae_pips ?? '—'}</td>
+      <td class="px-3 py-2 text-right" style="color:#67e8f9">${t.actual_mfe_pips ?? '—'}</td>
+      <td class="px-3 py-2 text-slate-500 max-w-xs truncate" title="${esc(t.notes||'')}">${esc(t.notes||'—')}</td>
+      <td class="px-3 py-2">
+        <button onclick="deleteTrade(${t.id})" class="btn-danger">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStats(trades) {
+  const wins   = trades.filter(t => t.outcome === 'Win').length;
+  const losses = trades.filter(t => t.outcome === 'Loss').length;
+  const netR   = trades.reduce((s,t) => s + t.net_r, 0);
+  const wr     = trades.length ? ((wins/trades.length)*100).toFixed(1) : 0;
+  document.getElementById('stat-total').textContent  = trades.length;
+  document.getElementById('stat-wins').textContent   = wins;
+  document.getElementById('stat-losses').textContent = losses;
+  document.getElementById('stat-wr').textContent     = `${wr}%`;
+  const el = document.getElementById('stat-netr');
+  el.textContent = `${netR >= 0 ? '+' : ''}${netR.toFixed(2)}R`;
+  el.style.color = netR > 0 ? '#4ade80' : netR < 0 ? '#f87171' : '#94a3b8';
+}
+
+async function deleteTrade(id) {
+  if (!confirm(`Delete trade #${id}? This cannot be undone.`)) return;
+  const r = await api(`/api/trades/${id}`, 'DELETE');
+  if (r.ok) { toast('Trade deleted.'); await loadTrades(); }
+  else toast('Failed to delete.', false);
+}
+
+// ── Webhook ────────────────────────────────────────────────────────────────
+async function pollWebhookBadge() {
+  const items = await api('/api/webhook/queue').then(r=>r.json());
+  const badge = document.getElementById('webhook-badge');
+  if (items.length > 0) { badge.textContent = `${items.length} Pending`; badge.classList.remove('hidden'); }
+  else badge.classList.add('hidden');
+}
+
+async function loadWebhookQueue() {
+  const items = await api('/api/webhook/queue').then(r=>r.json());
+  const el = document.getElementById('webhook-list');
+  if (!items.length) { el.innerHTML = '<p class="text-slate-600 text-sm">No pending alerts.</p>'; return; }
+  el.innerHTML = items.map(w => {
+    let parsed = {};
+    try { parsed = JSON.parse(w.payload); } catch(e) {}
+    return `<div class="card p-4 flex items-start justify-between gap-4">
+      <div>
+        <div class="text-xs text-slate-500 mb-1">Received: ${w.received_at}</div>
+        <pre class="text-xs text-slate-300 whitespace-pre-wrap">${esc(JSON.stringify(parsed,null,2))}</pre>
+      </div>
+      <div class="flex flex-col gap-2 shrink-0">
+        <button onclick="prefillFromWebhook(${w.id},'${esc(JSON.stringify(parsed))}')" class="btn-primary btn-sm">Use</button>
+        <button onclick="dismissWebhook(${w.id})" class="btn-danger">Dismiss</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function prefillFromWebhook(wid, payloadStr) {
+  let p = {};
+  try { p = JSON.parse(payloadStr); } catch(e) {}
+
+  const setSelect = (id, val) => {
+    if (!val) return;
+    const s = document.getElementById(id);
+    [...s.options].forEach(o => { if (o.value.toLowerCase() === String(val).toLowerCase()) o.selected = true; });
+  };
+  const setInput = (id, val) => { if (val != null && val !== '') document.getElementById(id).value = val; };
+
+  // Standard TradingView alert payload fields
+  setSelect('f-pair',      p.pair      || p.symbol || p.ticker);
+  setSelect('f-tf',        p.timeframe || p.tf     || p.interval);
+  setSelect('f-direction', p.direction || p.side   || (p.action === 'buy' ? 'Bullish' : p.action === 'sell' ? 'Bearish' : null));
+  setSelect('f-session',   p.session);
+  setSelect('f-outcome',   p.outcome);
+  setInput('f-rr',         p.rr        || p.risk_reward || p.rrr);
+  setInput('f-sl',         p.sl_pips   || p.stop_pips);
+  setInput('f-tp',         p.tp_pips   || p.target_pips);
+  setInput('f-entry-px',   p.price     || p.entry_price);
+  setInput('f-sl-px',      p.sl_price  || p.stop_price);
+  setInput('f-tp-px',      p.tp_price  || p.target_price);
+  setInput('f-notes',      p.notes     || p.comment || p.message);
+
+  if (p.timeframe || p.tf || p.interval) handleTimeframeChange();
+
+  dismissWebhook(wid);
+  openModal('trade-modal');
+  showTab('journal');
+}
+
+async function dismissWebhook(wid) {
+  await api(`/api/webhook/dismiss/${wid}`, 'POST');
+  await loadWebhookQueue();
+  await pollWebhookBadge();
+}
+
+// ── Settings CRUD ──────────────────────────────────────────────────────────
+const settingsCfg = {
+  pairs:      { inputId:'new-pair-input',   listId:'pairs-list',      path:'/api/settings/pairs',      nameKey:null,           idKey:null },
+  timeframes: { inputId:'new-tf-input',     listId:'timeframes-list', path:'/api/settings/timeframes', nameKey:null,           idKey:null },
+  modules:    { inputId:'new-module-input', listId:'modules-list',    path:'/api/settings/modules',    nameKey:'module_name',  idKey:'id' },
+  levels:     { inputId:'new-level-input',  listId:'levels-list',     path:'/api/settings/levels',     nameKey:'level_name',   idKey:'id' },
+};
+
+async function loadAllSettings() {
+  for (const key of Object.keys(settingsCfg)) await loadSettingList(key);
+}
+
+async function loadSettingList(key) {
+  const cfg   = settingsCfg[key];
+  const items = await api(cfg.path).then(r=>r.json());
+  const ul    = document.getElementById(cfg.listId);
+  if (!items.length) { ul.innerHTML = '<li class="text-slate-600 text-xs py-1">None added yet.</li>'; return; }
+  ul.innerHTML = items.map(item => {
+    const isObj = typeof item === 'object';
+    const name  = isObj ? item[cfg.nameKey] : item;
+    const delId = isObj ? item[cfg.idKey]   : encodeURIComponent(name);
+    return `<li class="flex items-center justify-between text-xs text-slate-300 py-1" style="border-bottom:1px solid #1e2a3a">
+      <span class="truncate mr-2" title="${esc(name)}">${esc(name)}</span>
+      <button onclick="deleteSetting('${key}','${delId}')" class="btn-danger" style="flex-shrink:0">✕</button>
+    </li>`;
+  }).join('');
+}
+
+async function addSetting(key) {
+  const cfg   = settingsCfg[key];
+  const input = document.getElementById(cfg.inputId);
+  const name  = input.value.trim();
+  if (!name) return;
+  const r    = await api(cfg.path, 'POST', {name});
+  const data = await r.json();
+  if (!r.ok) { toast(data.error || 'Failed to add.', false); return; }
+  input.value = '';
+  toast('Added successfully!');
+  await loadSettingList(key);
+  await populateFormDropdowns();
+}
+
+async function deleteSetting(key, idOrName) {
+  const cfg  = settingsCfg[key];
+  const r    = await api(`${cfg.path}/${idOrName}`, 'DELETE');
+  const data = await r.json();
+  if (!r.ok) { toast(data.error || 'Cannot delete.', false); return; }
+  toast('Deleted.');
+  await loadSettingList(key);
+  await populateFormDropdowns();
+}
+
+// ── CSV Import ─────────────────────────────────────────────────────────────
+async function handleCSVUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  toast('Processing CSV...', true);
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r    = await fetch('/api/import-tradingview', {method:'POST', body:form});
+    const data = await r.json();
+    if (!r.ok) { toast(data.error || 'Import failed.', false); }
+    else {
+      const {inserted, skipped, errors} = data;
+      let msg = `Ingested ${inserted} trade${inserted!==1?'s':''}!`;
+      if (skipped)       msg += ` (${skipped} duplicate${skipped!==1?'s':''} skipped)`;
+      if (errors.length) msg += ` | ${errors.length} error(s).`;
+      toast(msg, inserted > 0 || skipped > 0);
+      if (inserted > 0) await loadTrades();
+    }
+  } catch(e) { toast('Upload error: ' + e.message, false); }
+  event.target.value = '';
+}
+
+// ── AI Export ──────────────────────────────────────────────────────────────
+async function exportAI() {
+  const data = await api('/api/export').then(r=>r.json());
+  document.getElementById('ai-payload').value = data.payload;
+  openModal('ai-modal');
+}
+
+async function copyAIPayload() {
+  const text = document.getElementById('ai-payload').value;
+  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard!'); }
+  catch(e) { document.getElementById('ai-payload').select(); document.execCommand('copy'); toast('Copied!'); }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

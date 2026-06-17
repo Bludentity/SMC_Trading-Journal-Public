@@ -1,0 +1,39 @@
+# Database files
+smc_backtest.db
+*.sqlite
+*.db
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# IDE config
+.vscode/
+.idea/
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Prevent accidental check-in of desktop exe
+*.exe
