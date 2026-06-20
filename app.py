@@ -1,5 +1,12 @@
+"""SMC Journal web application.
+
+Provides Flask routes for settings, trades, and exports.
+"""
+
 import json
+import sys
 from flask import Flask, request, jsonify, render_template, abort
+from werkzeug.exceptions import HTTPException
 from database import (
     init_db,
     insert_trade, get_all_trades, get_trade, delete_trade,
@@ -14,8 +21,61 @@ from database import (
 import threading
 import webbrowser
 import os
+import logging
+import traceback
+import datetime
 
-app = Flask(__name__)
+# Resource and data directory resolution
+if getattr(sys, 'frozen', False):
+    RESOURCE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+else:
+    RESOURCE_DIR = os.getcwd()
+
+def _select_writable_data_dir():
+    smc_base = os.environ.get('SMC_BASE_DIR')
+    if smc_base:
+        return smc_base
+    local = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    cand = os.path.join(local, 'SMC_Journal')
+    try:
+        os.makedirs(cand, exist_ok=True)
+        return cand
+    except Exception:
+        return os.getcwd()
+
+DATA_DIR = _select_writable_data_dir()
+template_dir = os.path.join(RESOURCE_DIR, 'templates')
+static_dir = os.path.join(RESOURCE_DIR, 'static') if os.path.exists(os.path.join(RESOURCE_DIR, 'static')) else None
+
+app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+
+import json as _json
+app.jinja_env.filters['fromjson'] = lambda s: _json.loads(s) if s else []
+
+try:
+    init_db()
+except Exception:
+    pass
+
+# Register blueprint after app and filters are configured
+from trade_views import trade_bp
+app.register_blueprint(trade_bp)
+
+log_path = os.path.join(DATA_DIR, "errors.log")
+try:
+    fh = logging.FileHandler(log_path)
+    fh.setLevel(logging.ERROR)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    fh.setFormatter(fmt)
+    app.logger.addHandler(fh)
+    app.logger.setLevel(logging.INFO)
+except Exception:
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.ERROR)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    sh.setFormatter(fmt)
+    app.logger.addHandler(sh)
+    app.logger.setLevel(logging.INFO)
 
 VALID_DIRECTIONS = {"Bullish", "Bearish"}
 VALID_SESSIONS   = {"Asian", "London", "New York"}
@@ -164,6 +224,36 @@ def api_webhook_dismiss(wid):
     return jsonify({"dismissed": wid})
 
 
+# Screenshot storage setting (local or remote)
+@app.route('/api/settings/screenshot-storage', methods=['GET'])
+def api_get_screenshot_storage():
+    path = os.path.join(DATA_DIR, 'settings.json')
+    mode = 'local'
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as fh:
+                j = json.load(fh)
+                mode = j.get('screenshot_storage', 'local')
+    except Exception:
+        mode = 'local'
+    return jsonify({'storage': mode})
+
+
+@app.route('/api/settings/screenshot-storage', methods=['POST'])
+def api_set_screenshot_storage():
+    data = request.get_json(force=True) or {}
+    val = data.get('storage', 'local')
+    if val not in ('local', 'remote'):
+        return jsonify({'error': 'Invalid storage type.'}), 400
+    path = os.path.join(DATA_DIR, 'settings.json')
+    try:
+        with open(path, 'w', encoding='utf-8') as fh:
+            json.dump({'screenshot_storage': val}, fh)
+        return jsonify({'storage': val})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── TradingView CSV Import ────────────────────────────────────────────────────
 
 @app.route("/api/import-tradingview", methods=["POST"])
@@ -228,10 +318,22 @@ def validate_trade(d):
         if bad:
             errs.append(f"Unknown module(s): {', '.join(bad)}.")
 
-    # dynamic_entry_zones — optional dict, N/A values accepted silently
+    # dynamic_entry_zones — optional dict; accept dict, null, empty, JSON string, or 'N/A'
     zones = d.get("dynamic_entry_zones")
     if zones is not None and not isinstance(zones, dict):
-        errs.append("'dynamic_entry_zones' must be an object.")
+        if isinstance(zones, str):
+            if zones.strip() in ("", "{}", "N/A"):
+                # treat as no zones provided
+                pass
+            else:
+                try:
+                    parsed = json.loads(zones)
+                    if not isinstance(parsed, dict):
+                        errs.append("'dynamic_entry_zones' must be an object.")
+                except Exception:
+                    errs.append("'dynamic_entry_zones' must be valid JSON.")
+        else:
+            errs.append("'dynamic_entry_zones' must be an object.")
 
     # MAE/MFE conditional rules
     outcome = d.get("outcome")
@@ -251,6 +353,40 @@ def validate_trade(d):
             errs.append(f"'{f}' must be a number.")
 
     return errs
+
+
+# Global exception handler to capture unexpected tracebacks to errors.log
+@app.errorhandler(Exception)
+def _handle_exception(e):
+    # Preserve HTTP exceptions (404, 400, etc.) so they return their proper code.
+    if isinstance(e, HTTPException):
+        return e
+
+    tb = traceback.format_exc()
+    try:
+        with open(os.path.join(DATA_DIR, "errors.log"), "a", encoding="utf-8") as ef:
+            ef.write("\n\n[{0}] Exception: {1}\n".format(datetime.datetime.utcnow().isoformat(), str(e)))
+            ef.write(tb)
+    except Exception:
+        pass
+    app.logger.error("Unhandled exception: %s", str(e))
+    return "Internal Server Error", 500
+
+
+# Shutdown endpoint used by launcher to cleanly stop a running instance.
+@app.route('/__shutdown_app', methods=['POST'])
+def __shutdown_app():
+    # Only allow local requests to shutdown
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return 'Forbidden', 403
+    func = request.environ.get('werkzeug.server.shutdown')
+    if func is None:
+        return 'Not running with the Werkzeug Server', 500
+    try:
+        func()
+        return 'Shutting down', 200
+    except Exception:
+        return 'Shutdown failed', 500
 
 
 if __name__ == "__main__":

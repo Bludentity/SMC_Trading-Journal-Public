@@ -1,14 +1,27 @@
 # SMC Backtest Journal
 
-This is a Smart Money Concepts (SMC) Trading Journal. It runs locally (Python), as a single-file Windows exe, or on Render.
+SMC Backtest Journal is a compact web-based backtesting trading journal focused on Smart Money Concepts (SMC).
 
-Prerequisites
-- Python 3.10+ (3.11/3.13 tested)
-- `pip` and a virtual environment
-- For Postgres: working `DATABASE_URL` and outbound access to the DB host on port 5432
+Overview (technical)
+- Python Flask app serving a single-page UI; data stored in SQLite by default or Postgres when `DATABASE_URL` is set.
+- Key modules:
+	- `app.py` — Flask routes and validation logic.
+	- `trade_views.py` — trade detail pages, screenshots, and export endpoints.
+	- `database.py` — DB schema and persistence layer (SQLAlchemy). Handles local DB and Postgres via `DATABASE_URL`.
+	- `launcher.py` — runtime helper used by the desktop exe to set a writable data dir and start the Flask app.
+- Desktop packaging uses PyInstaller (build scripts provided).
 
-Local quick start
-1. Create a virtual environment and install deps:
+Project layout (important files)
+- `app.py` — main Flask app and validation
+- `trade_views.py` — blueprint serving trade detail pages and upload endpoints
+- `database.py` — schema and DB helpers
+- `templates/` — HTML templates (`index.html`, `trade_details.html`)
+- `static/` (optional) — static assets
+- `scripts/` — helper scripts for creating desktop shortcuts and inspecting runtime state
+- `build_desktop.py` / `SMC_Journal.spec` — packaging helpers
+
+Quick start (local)
+1. Create and activate a virtual environment, then install dependencies:
 
 ```bash
 python -m venv .venv
@@ -17,78 +30,65 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-2. Start the app (launcher opens the UI in your browser):
+2. Start the app via the launcher (opens the UI in your default browser):
 
 ```bash
 python launcher.py
 ```
 
-3. Smoke test (confirm DB + server):
+3. Verify the server is running:
 
 ```bash
-python -c "from database import init_db, get_pairs; init_db(); print('Pairs:', get_pairs())"
-curl -i http://127.0.0.1:5000/
+curl -i http://127.0.0.1:5000/api/trades
 ```
 
-Desktop build (Windows exe)
-- Build single-file exe (PyInstaller required):
+Local vs Remote DB
+- Local (default): when `DATABASE_URL` is not configured the app uses a local SQLite DB named `smc_backtest.db` stored in the working directory or the runtime `DATA_DIR` chosen by `launcher.py` (typically `%LOCALAPPDATA%\SMC_Journal` on Windows when using the exe).
+- Remote Postgres: set `DATABASE_URL` (standard SQLAlchemy URI). Example `.env` containing runtime configuration placed beside the exe or in your environment:
+
+```
+SECRET_KEY=<pick-a-secret>
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+```
+
+Desktop exe (Windows)
+- Build (requires PyInstaller):
 
 ```bash
 python build_desktop.py --icon icon.ico --name SMC_Journal
 ```
 
-- Place a `.env` next to `SMC_Journal.exe` to connect to Postgres at runtime. Example `.env`:
+- Deployment: copy the produced `SMC_Journal.exe` to a writable location such as `%LOCALAPPDATA%\SMC_Journal`, place a `.env` file there if you use Postgres, and create a desktop shortcut. `scripts/set_shortcut_local.ps1` automates creating the shortcut and launching the exe.
+
+Deploy to Render / Railway
+- Both providers run the Flask app the same way. Use `gunicorn` in your service start command:
 
 ```
-SECRET_KEY=replace-with-a-strong-secret
-DATABASE_URL=postgresql://user:password@host:5432/dbname?sslmode=require
+gunicorn app:app --bind 0.0.0.0:$PORT
 ```
 
-Render deployment (direct, fast)
-Follow these exact steps to deploy from a GitHub repo to Render:
+- Set the required env vars in the provider dashboard: `DATABASE_URL`, `SECRET_KEY`, and any other runtime flags your deployment needs.
 
-1. Clone this repo.
-2. In Render, create a new Web Service → Import from GitHub and select the cloned repo/branch.
-3. Use these settings:
-	- Environment: `Python`
-	- Build command: `pip install -r requirements.txt`
-	- Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
-4. Add environment variables in Render dashboard:
-	- `DATABASE_URL` (Postgres connection string)
-	- `SECRET_KEY`
+Exporting data to AI
+- Use the `/api/export` endpoint to generate an AI-friendly data payload. The UI also exposes an `Export AI File` action that saves a text export to the runtime `exports/` folder.
 
-Quick Render tips
-- Use `render logs <service-name>` or the dashboard to view runtime logs.
-- If DB connections fail, check DNS and outbound port 5432 from Render (Render generally has outbound DB access).
+Testing and validation
+- Basic smoke test: ensure `GET /api/trades` returns 200 and JSON.
+- The codebase includes validation for trade fields; dynamic entry zones accept `null`, empty, a dict, or a JSON string (the UI treats `N/A` as no value).
 
-Webhooks & API
-- `POST /webhook` accepts TradingView webhooks; payloads are queued in the DB for review in the UI.
-
-Environment behavior
-- If `DATABASE_URL` is set the app connects to Postgres; otherwise it creates and uses `smc_backtest.db` locally.
-- For the frozen exe, the app looks for `.env` in the exe folder.
+Cleaning and preparing to push (For contributors)
+- The repo should not contain build artifacts, local DBs, or runtime files. Recommended files to leave out of VCS (already in `.gitignore`):
+	- `dist/`, `build/`, `*.spec`, `*.exe`
+	- `smc_backtest.db`, `*.db`
+	- `uploads/`, `exports/`, `errors.log`
+	- `.env`, `.env.local`
 
 Troubleshooting
-- DNS/connection checks (PowerShell):
+- If the desktop exe does not start, check `%LOCALAPPDATA%\SMC_Journal\errors.log` for tracebacks.
+- If deployment cannot connect to Postgres, verify `DATABASE_URL`, firewall rules, and that your cloud provider allows outbound DB connections.
 
-```powershell
-nslookup <db-host>
-Test-NetConnection -ComputerName <db-host> -Port 5432
-tracert <db-host>
-```
+Further notes
+- The app is intentionally small and uses server-side validation in `app.py` and controlled storage normalization in `database.py`.
 
-- Generate a secure `SECRET_KEY`:
+---
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Data import example
-
-```bash
-python - <<'PY'
-from database import import_tradingview_csv
-csv = open('sample.csv','r',encoding='utf-8').read()
-print(import_tradingview_csv(csv))
-PY
-```

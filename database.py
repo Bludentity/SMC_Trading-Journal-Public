@@ -1,9 +1,4 @@
-"""Database layer: SQLAlchemy Core with dual DB routing (Postgres if DATABASE_URL, else local SQLite).
-
-- Loads .env automatically via python-dotenv
-- Ensures sslmode=require appended for Postgres if missing
-- Uses SQLAlchemy Core to avoid param marker differences
-"""
+"""Database layer for trades and settings."""
 import os
 import sys
 import json
@@ -15,8 +10,8 @@ from sqlalchemy import (
     create_engine, MetaData, Table, Column, Integer, String, Text, Float, select, insert, update, delete, text
 )
 from sqlalchemy.exc import OperationalError, IntegrityError, InternalError
+from urllib.parse import urlparse, urlunparse, quote
 
-# Load local .env if present
 load_dotenv()
 
 EAT = pytz.timezone("Africa/Nairobi")
@@ -59,35 +54,90 @@ def _append_sslmode_if_needed(url: str) -> str:
     return url
 
 
+def _sanitize_db_url(url: str) -> str:
+    try:
+        p = urlparse(url)
+        # only handle netloc with username:password@host
+        if p.username and p.password:
+            # quote the password if it contains unsafe characters or spaces
+            pwd = p.password
+            if any(c.isspace() for c in pwd) or '@' in pwd or ':' in pwd or '%' in pwd:
+                enc = quote(pwd, safe='')
+                # rebuild netloc
+                user = p.username
+                host = p.hostname or ''
+                port = f":{p.port}" if p.port else ''
+                netloc = f"{user}:{enc}@{host}{port}"
+                new = p._replace(netloc=netloc)
+                return urlunparse(new)
+    except Exception:
+        pass
+    return url
+
+
 def _get_engine():
     global _ENGINE
     if _ENGINE is not None:
         return _ENGINE
 
     db_url = os.environ.get("DATABASE_URL")
-    # If running as a frozen exe, allow .env next to exe
     if getattr(sys, 'frozen', False):
-        dot = os.path.join(os.path.dirname(sys.executable), '.env')
-        if os.path.exists(dot):
-            load_dotenv(dot)
-            db_url = os.environ.get('DATABASE_URL')
+        # Try loading .env from custom SMC_BASE_DIR first, then exe dir
+        candidates = []
+        smc_base = os.environ.get('SMC_BASE_DIR')
+        if smc_base:
+            candidates.append(os.path.join(smc_base, '.env'))
+        # check common install location under Program Files
+        prog = os.environ.get('ProgramFiles') or r'C:\Program Files'
+        candidates.append(os.path.join(prog, 'SMC_Journal', '.env'))
+        # finally check the executable directory (onefile temp dir)
+        candidates.append(os.path.join(os.path.dirname(sys.executable), '.env'))
+        for dot in candidates:
+            try:
+                if os.path.exists(dot):
+                    load_dotenv(dot)
+                    db_url = os.environ.get('DATABASE_URL')
+                    break
+            except Exception:
+                pass
 
     try:
         if db_url:
+            db_url = _sanitize_db_url(db_url)
             db_url = _append_sslmode_if_needed(db_url)
-            eng = create_engine(db_url, pool_pre_ping=True)
-            # quick smoke test
-            with eng.connect() as c:
-                pass
-            _ENGINE = eng
-            return _ENGINE
+            try:
+                eng = create_engine(db_url, pool_pre_ping=True)
+                with eng.connect() as c:
+                    pass
+                _ENGINE = eng
+                return _ENGINE
+            except OperationalError as e:
+                # Log connection failure to a writable errors.log when frozen
+                try:
+                    if getattr(sys, 'frozen', False):
+                        smc_base = os.environ.get('SMC_BASE_DIR')
+                        if smc_base:
+                            data_dir = smc_base
+                        else:
+                            local = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+                            data_dir = os.path.join(local, 'SMC_Journal')
+                        os.makedirs(data_dir, exist_ok=True)
+                        elog = os.path.join(data_dir, 'errors.log')
+                        with open(elog, 'a', encoding='utf-8') as ef:
+                            ef.write(f"[DB CONNECT ERROR] {str(e)}\n")
+                except Exception:
+                    pass
+                # fall back to sqlite
     except OperationalError:
-        # connection failed; fall back to sqlite
         pass
 
-    # Local sqlite fallback (in cwd or next to exe when frozen)
     if getattr(sys, 'frozen', False):
-        base = os.path.dirname(sys.executable)
+        # Prefer SMC_BASE_DIR for sqlite storage when frozen, else LocalAppData
+        base = os.environ.get('SMC_BASE_DIR')
+        if not base:
+            local = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+            base = os.path.join(local, 'SMC_Journal')
+        os.makedirs(base, exist_ok=True)
     else:
         base = os.getcwd()
     sqlite_path = os.path.join(base, 'smc_backtest.db')
@@ -143,6 +193,22 @@ webhook_queue = Table('webhook_queue', _METADATA,
                       Column('payload', Text, nullable=False),
                       Column('received_at', String, nullable=False),
                       Column('status', String, nullable=False, default='pending'))
+
+
+# New table for storing screenshots attached to trades (backwards-compatible)
+trade_screenshots = Table('trade_screenshots', _METADATA,
+                          Column('id', Integer, primary_key=True, autoincrement=True),
+                          Column('trade_id', Integer, nullable=False),
+                          Column('filename', String, nullable=False),
+                          Column('created_at', String, nullable=False))
+
+# Remote (blob) screenshot storage
+trade_screenshots_blob = Table('trade_screenshots_blob', _METADATA,
+                               Column('id', Integer, primary_key=True, autoincrement=True),
+                               Column('trade_id', Integer, nullable=False),
+                               Column('filename', String, nullable=False),
+                               Column('data', Text, nullable=False),
+                               Column('created_at', String, nullable=False))
 
 
 def init_db():
@@ -411,6 +477,54 @@ def insert_trade(data):
             return None
 
 
+def update_trade(trade_id, data: dict):
+    """Update allowed trade fields using SQLAlchemy update. Returns True on success."""
+    allowed = {
+        'pair', 'timeframe', 'direction', 'session', 'execution_time_eat',
+        'entry_modules', 'dynamic_entry_zones', 'actual_reversal_zone', 'actual_reversal_custom',
+        'reversal_level',
+        'outcome', 'exact_entry_price', 'exact_sl_price', 'exact_tp_price',
+        'planned_sl_pips', 'planned_tp_pips', 'planned_rr', 'net_r',
+        'actual_mae_pips', 'actual_mfe_pips', 'sl_placement_desc', 'tp_placement_desc',
+        'entry_reversal_notes', 'notes'
+    }
+    to_update = {k: v for k, v in data.items() if k in allowed}
+    if not to_update:
+        return False
+    # compute net_r if outcome or planned_rr changed
+    if 'outcome' in to_update or 'planned_rr' in to_update:
+        outcome = to_update.get('outcome')
+        planned_rr = to_update.get('planned_rr')
+        # fetch existing values if missing
+        existing = get_trade(trade_id) or {}
+        outcome = outcome if outcome is not None else existing.get('outcome')
+        planned_rr = planned_rr if planned_rr is not None else existing.get('planned_rr')
+        try:
+            to_update['net_r'] = compute_net_r(outcome, planned_rr)
+        except Exception:
+            to_update['net_r'] = 0.0
+
+    eng = _get_engine()
+    # normalize certain fields to storage format
+    if 'entry_modules' in to_update:
+        if isinstance(to_update['entry_modules'], list):
+            to_update['entry_modules'] = json.dumps(to_update['entry_modules'])
+        else:
+            to_update['entry_modules'] = to_update['entry_modules'] or '[]'
+    if 'dynamic_entry_zones' in to_update:
+        v = to_update['dynamic_entry_zones']
+        if isinstance(v, dict):
+            to_update['dynamic_entry_zones'] = json.dumps(v)
+        elif isinstance(v, str):
+            to_update['dynamic_entry_zones'] = v or '{}'
+        else:
+            to_update['dynamic_entry_zones'] = '{}'
+
+    with eng.begin() as conn:
+        conn.execute(update(trades).where(trades.c.id == trade_id).values(**to_update))
+    return True
+
+
 def get_all_trades():
     eng = _get_engine()
     with eng.connect() as conn:
@@ -434,6 +548,19 @@ def delete_trade(trade_id):
         conn.execute(delete(trades).where(trades.c.id == trade_id))
 
 
+def delete_trades_bulk(ids):
+    """Delete multiple trades in a single transaction."""
+    if not ids:
+        return 0
+    eng = _get_engine()
+    with eng.begin() as conn:
+        res = conn.execute(delete(trades).where(trades.c.id.in_(ids)))
+        try:
+            return res.rowcount if hasattr(res, 'rowcount') else 0
+        except Exception:
+            return 0
+
+
 # Webhook queue
 def queue_webhook(payload_str):
     eng = _get_engine()
@@ -452,6 +579,131 @@ def dismiss_webhook(wid):
     eng = _get_engine()
     with eng.begin() as conn:
         conn.execute(update(webhook_queue).where(webhook_queue.c.id == wid).values(status='dismissed'))
+
+
+def insert_screenshot(trade_id, filename):
+    eng = _get_engine()
+    try:
+        with eng.begin() as conn:
+            conn.execute(insert(trade_screenshots).values(trade_id=trade_id, filename=filename, created_at=now_eat_str()))
+    except OperationalError as e:
+        if 'no such table' in str(e).lower():
+            try:
+                init_db()
+            except Exception:
+                pass
+            with _get_engine().begin() as conn:
+                conn.execute(insert(trade_screenshots).values(trade_id=trade_id, filename=filename, created_at=now_eat_str()))
+        else:
+            raise
+
+
+def insert_screenshot_blob(trade_id, filename, b64data):
+    eng = _get_engine()
+    with eng.begin() as conn:
+        conn.execute(insert(trade_screenshots_blob).values(trade_id=trade_id, filename=filename, data=b64data, created_at=now_eat_str()))
+
+
+def delete_screenshot_by_id(sid):
+    """Delete screenshot by id from either local table or blob table. Returns True if deleted."""
+    eng = _get_engine()
+    with eng.begin() as conn:
+        # try local table first
+        row = conn.execute(select(trade_screenshots).where(trade_screenshots.c.id == sid)).fetchone()
+        if row:
+            fname = row._mapping.get('filename')
+            conn.execute(delete(trade_screenshots).where(trade_screenshots.c.id == sid))
+            # remove file if exists
+            try:
+                base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+                path = os.path.join(base, 'uploads', fname)
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+            return True
+
+        # try blob table
+        brow = conn.execute(select(trade_screenshots_blob).where(trade_screenshots_blob.c.id == sid)).fetchone()
+        if brow:
+            conn.execute(delete(trade_screenshots_blob).where(trade_screenshots_blob.c.id == sid))
+            return True
+    return False
+
+
+def get_screenshots(trade_id):
+    eng = _get_engine()
+    try:
+        out = []
+        with eng.connect() as conn:
+            rows = conn.execute(select(trade_screenshots).where(trade_screenshots.c.trade_id == trade_id).order_by(trade_screenshots.c.id.desc())).fetchall()
+            for r in rows:
+                m = dict(r._mapping)
+                m['storage'] = 'local'
+                out.append(m)
+            # include remote blobs
+            try:
+                brow = conn.execute(select(trade_screenshots_blob).where(trade_screenshots_blob.c.trade_id == trade_id).order_by(trade_screenshots_blob.c.id.desc())).fetchall()
+                for r in brow:
+                    m = dict(r._mapping)
+                    m['storage'] = 'remote'
+                    out.append(m)
+            except Exception:
+                pass
+        return out
+    except OperationalError as e:
+        if 'no such table' in str(e).lower():
+            try:
+                init_db()
+            except Exception:
+                pass
+            eng2 = _get_engine()
+            out2 = []
+            with eng2.connect() as conn:
+                rows = conn.execute(select(trade_screenshots).where(trade_screenshots.c.trade_id == trade_id).order_by(trade_screenshots.c.id.desc())).fetchall()
+                for r in rows:
+                    m = dict(r._mapping)
+                    m['storage'] = 'local'
+                    out2.append(m)
+                try:
+                    brow = conn.execute(select(trade_screenshots_blob).where(trade_screenshots_blob.c.trade_id == trade_id).order_by(trade_screenshots_blob.c.id.desc())).fetchall()
+                    for r in brow:
+                        m = dict(r._mapping)
+                        m['storage'] = 'remote'
+                        out2.append(m)
+                except Exception:
+                    pass
+            return out2
+        raise
+
+
+def get_screenshot_blob(sid):
+    eng = _get_engine()
+    try:
+        with eng.connect() as conn:
+            row = conn.execute(select(trade_screenshots_blob).where(trade_screenshots_blob.c.id == sid)).fetchone()
+            return dict(row._mapping) if row else None
+    except OperationalError as e:
+        if 'no such table' in str(e).lower():
+            try:
+                init_db()
+            except Exception:
+                pass
+            with _get_engine().connect() as conn:
+                row = conn.execute(select(trade_screenshots_blob).where(trade_screenshots_blob.c.id == sid)).fetchone()
+                return dict(row._mapping) if row else None
+        raise
+
+
+# Ensure tables exist on import (helps frozen exe that may run from different CWD)
+try:
+    _METADATA.create_all(_get_engine())
+except Exception:
+    try:
+        # best-effort: ignore failures during import time
+        pass
+    except Exception:
+        pass
 
 
 # CSV import & AI export utilities
@@ -685,8 +937,15 @@ def import_tradingview_csv(content):
     return inserted, skipped, errors
 
 
-def generate_ai_export():
-    trades_all = get_all_trades()
+def generate_ai_export(ids=None):
+    # if ids provided, fetch only those trades in the given order; otherwise all
+    if ids:
+        eng = _get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(select(trades).where(trades.c.id.in_(ids)).order_by(trades.c.id.asc())).fetchall()
+            trades_all = [dict(r._mapping) for r in rows]
+    else:
+        trades_all = get_all_trades()
     if not trades_all:
         return "No trades recorded yet."
 
@@ -1495,86 +1754,4 @@ def import_tradingview_csv(content):
     return inserted, skipped, errors
 
 
-AI_DICT_HEADER = """[AI DATA DICTIONARY HEADER START]
-This dataset contains advanced, professional backtesting trade execution logs utilizing Smart Money Concepts (SMC) and institutional order flow mechanics. Use this exact schema definition dictionary to parse, model, and analyze the data records below:
 
-PRIMARY STRUCTURAL ENTITIES & FIELD LOGIC:
-- 'Trade_ID': A unique, auto-incremented integer identifying the trade chronicle index.
-- 'Asset_Pair': The financial asset ticker being backtested (e.g., XAUUSD, EURUSD), dynamic from settings configuration.
-- 'Timeframe': The precise execution or directional bias chart timeframe (e.g., 4H, 15M, 1M).
-- 'Direction': The order framework style. Restricted to 'BUY' (Long market positions) or 'SELL' (Short market positions).
-- 'Trading_Session': The specific regional market liquidity block when entry was activated ('Asian', 'London', 'New York').
-- 'Execution_Time_EAT': The explicit execution timestamp hardcoded and normalized to East African Time (EAT / UTC+3).
-- 'SMC_Entry_Modules': A multi-selected array of mechanical execution criteria checked by the trader to justify entry validation (e.g., [Decisional OB, Inducement Sweep]).
-- 'Dynamic_Entry_Zones': A breakdown mapping out exactly where the trader entered relative to each checked Entry Module (e.g., Entering at the 'Upper Limit' of the Decisional OB while simultaneously hitting the 'Mean Threshold' of the Extreme OF).
-- 'Actual_Reversal_Zone': The true, physical structural landmark where the market exhausted its price expansion/drawdown and printed its real pivot point before moving toward targets. Compare this directly to 'Dynamic_Entry_Zones' to study structural front-running, drawdown overextensions, and zone failures.
-- 'Exact_Entry_Price': The literal float execution entry rate digit. Used to cross-reference if the trade interacted with institutional whole numbers, key psychological round figures (.000, .500), or institutional quarters (.250, .750).
-- 'Exact_Stop_Loss_Price': The exact protective invalidation price point.
-- 'Exact_Take_Profit_Price': The exact planned objective target price point.
-- 'Planned_SL_Pips': The total calculated mathematical pip distance from entry to stop loss.
-- 'Planned_TP_Pips': The total calculated mathematical pip distance from entry to take profit.
-- 'Planned_RR_Ratio': The raw calculated risk-to-reward ratio metric planned prior to execution (e.g., 1:4.5).
-- 'Trade_Outcome': The definitive manual resolution of the position. Restricted to 'Win', 'Loss', or 'Break-Even'.
-- 'Net_R_Gain_Loss': The automated statistical performance return value based strictly on outcome (A 'Loss' = -1.0R, 'Break-Even' = 0.0R, 'Win' = full positive Planned_RR value).
-- 'Max_Adverse_Excursion_MAE': The maximum drawdown in pips experienced during the life of the trade. Mandatory for wins to evaluate entry optimization.
-- 'Max_Favorable_Excursion_MFE': The maximum profit expansion in pips reached before invalidation. Mandatory for losses to analyze exit greed optimization.
-- 'SL_Placement_Desc': Qualitative structural explanation outlining the logic of where the protective order was positioned.
-- 'TP_Placement_Desc': Qualitative structural explanation outlining the logic of where the target objective was positioned.
-- 'Entry_Reversal_Notes': Tape-reading observations made in real-time regarding candle signatures, reaction momentum, or zone mitigation nuances exactly during the entry window.
-- 'Final_Outcome_Notes': Macro retrospective comments logging psychology, mistakes, or key takeaways after the trade fully resolved.
-
-Analyze these records globally to extract edge patterns, structural performance anomalies, structural placement safety margins, and win-rate optimizations based on these descriptions.
-[AI DATA DICTIONARY HEADER END]
-
----
-[RAW DATA RECORDS FOLLOW]
-"""
-
-
-def generate_ai_export():
-    trades_all = get_all_trades()
-    if not trades_all:
-        return "No trades recorded yet."
-
-    records = []
-    for t in reversed(trades_all):
-        try:
-            modules = json.loads(t.get('entry_modules') or '[]')
-        except Exception:
-            modules = []
-        modules_str = ", ".join(modules) if modules else "N/A"
-
-        try:
-            zones_raw = json.loads(t.get('dynamic_entry_zones') or '{}')
-            zones_str = "; ".join([f"{mod}: {lvl}" for mod, lvl in zones_raw.items() if lvl and lvl != 'N/A']) or 'N/A'
-        except Exception:
-            zones_str = 'N/A'
-
-        reversal = t.get('actual_reversal_custom') or t.get('actual_reversal_zone') or 'N/A'
-
-        eat_display = t.get('execution_time_eat') or 'N/A'
-        if isinstance(eat_display, str) and len(eat_display) > 8:
-            try:
-                eat_display = datetime.strptime(eat_display, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M EAT")
-            except Exception:
-                pass
-
-        def _v(key, default='N/A'):
-            val = t.get(key)
-            return str(val) if val is not None else default
-
-        records.append(
-            f"RECORD_{t['id']}: "
-            f"ID: {t['id']} | Pair: {t['pair']} | TF: {t['timeframe']} | Dir: {t['direction']} | "
-            f"Session: {t.get('session') or 'N/A'} | Time: {eat_display} | "
-            f"Modules: [{modules_str}] | Entry_Zones: [{zones_str}] | "
-            f"Reversal_Zone: {reversal} | "
-            f"Entry_Px: {_v('exact_entry_price')} | SL_Px: {_v('exact_sl_price')} | TP_Px: {_v('exact_tp_price')} | "
-            f"P_SL: {_v('planned_sl_pips')} | P_TP: {_v('planned_tp_pips')} | P_RR: {_v('planned_rr')} | "
-            f"Outcome: {t['outcome']} | Net_R: {t['net_r']} | "
-            f"MAE: {_v('actual_mae_pips')} | MFE: {_v('actual_mfe_pips')} | "
-            f"SL_Desc: {_v('sl_placement_desc')} | TP_Desc: {_v('tp_placement_desc')} | "
-            f"Entry_Notes: {_v('entry_reversal_notes')} | Final_Notes: {_v('notes')}"
-        )
-
-    return AI_DICT_HEADER + "\n".join(records) + "\n\n[DATASET RECORD END]\n---\n"

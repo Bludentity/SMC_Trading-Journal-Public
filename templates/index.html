@@ -95,12 +95,26 @@
     <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Win Rate</div><div class="text-xl font-bold text-indigo-400" id="stat-wr">0%</div></div>
     <div class="card p-3 text-center"><div class="text-xs text-slate-500 mb-1">Net R</div><div class="text-xl font-bold" id="stat-netr">0.0R</div></div>
   </div>
+  <div class="flex items-center justify-between gap-2 mb-4">
+    <div id="bulk-toolbar" class="hidden items-center gap-2">
+      <span id="bulk-count" class="text-sm text-slate-300 mr-2"></span>
+      <button onclick="exportSelected()" class="btn-cyan">⬇ Export Selected</button>
+      <button onclick="deleteSelected()" class="btn-danger">✕ Delete Selected</button>
+      <button onclick="clearSelection()" class="btn-ghost btn-sm">Clear</button>
+    </div>
+    <div>
+      <label class="text-xs text-slate-400 mr-2">Select:</label>
+      <button onclick="selectAllTrades(true)" class="btn-ghost btn-sm">All</button>
+      <button onclick="selectAllTrades(false)" class="btn-ghost btn-sm">None</button>
+    </div>
+  </div>
   <!-- Table -->
   <div class="card overflow-x-auto">
     <table class="w-full text-xs">
       <thead>
-        <tr class="border-b border-slate-700 text-slate-500 uppercase tracking-wide">
-          <th class="px-3 py-3 text-left">ID</th>
+          <tr class="border-b border-slate-700 text-slate-500 uppercase tracking-wide">
+            <th class="px-3 py-3"><input type="checkbox" id="select-all-header" onchange="toggleSelectAllHeader(this)"></th>
+            <th class="px-3 py-3 text-left">ID</th>
           <th class="px-3 py-3 text-left">Pair</th>
           <th class="px-3 py-3 text-left">TF</th>
           <th class="px-3 py-3 text-left">Dir</th>
@@ -188,6 +202,20 @@
         <button onclick="addSetting('levels')" class="btn-primary btn-sm">Add</button>
       </div>
       <ul id="levels-list" class="space-y-1 max-h-52 overflow-y-auto"></ul>
+    </div>
+
+    <!-- Screenshot Storage -->
+    <div class="card p-4">
+      <h3 class="text-sm font-bold text-indigo-400 mb-1">Screenshot Storage</h3>
+      <p class="text-xs text-slate-500 mb-3">Choose where screenshots are saved to conserve local disk space.</p>
+      <div class="flex gap-2 items-center">
+        <select id="screenshot-storage" class="p-2 rounded bg-slate-800 text-slate-100">
+          <option value="local">Local (disk)</option>
+          <option value="remote">Remote (database)</option>
+        </select>
+        <button onclick="saveScreenshotStorage()" class="btn-primary btn-sm">Save</button>
+      </div>
+      <p class="text-xs text-slate-500 mt-2">Note: remote storage keeps the file bytes in the DB; local saves to <code>uploads/</code>.</p>
     </div>
 
   </div>
@@ -373,7 +401,8 @@
       <textarea id="ai-payload" readonly style="background:#0a0e1a;border:1px solid #2d3250;border-radius:6px;padding:12px;line-height:1.6;width:100%;height:380px;font-family:monospace;font-size:.72rem;color:#6ee7b7;resize:none;"></textarea>
     </div>
     <div class="px-6 py-4 border-t border-slate-700 flex gap-3">
-      <button onclick="copyAIPayload()" class="btn-primary flex-1">📋 Copy to Clipboard</button>
+      <button onclick="copyAIPayload()" class="btn-primary">📋 Copy to Clipboard</button>
+      <button onclick="downloadAIPayload()" class="btn-cyan">⬇ Export as File</button>
       <button onclick="closeModal('ai-modal')" class="btn-ghost">Close</button>
     </div>
   </div>
@@ -397,7 +426,7 @@ function toast(msg, ok=true) {
   setTimeout(() => el.classList.add('hidden'), 4000);
 }
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); if (id === 'ai-modal') { window.EXPORT_IDS = null; document.getElementById('ai-payload').value = ''; } }
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -650,6 +679,7 @@ function renderTradeTable(trades) {
     const netC = t.net_r > 0 ? 'color:#4ade80' : t.net_r < 0 ? 'color:#f87171' : 'color:#94a3b8';
 
     return `<tr style="border-bottom:1px solid #1e2a3a;" onmouseover="this.style.background='#1a2035'" onmouseout="this.style.background=''">
+      <td class="px-3 py-2"><input type="checkbox" class="select-trade-checkbox" data-id="${t.id}"></td>
       <td class="px-3 py-2 text-slate-500">#${t.id}</td>
       <td class="px-3 py-2 font-bold text-white">${t.pair}</td>
       <td class="px-3 py-2 text-slate-300">${t.timeframe}</td>
@@ -670,11 +700,15 @@ function renderTradeTable(trades) {
       <td class="px-3 py-2 text-right" style="color:#fb923c">${t.actual_mae_pips ?? '—'}</td>
       <td class="px-3 py-2 text-right" style="color:#67e8f9">${t.actual_mfe_pips ?? '—'}</td>
       <td class="px-3 py-2 text-slate-500 max-w-xs truncate" title="${esc(t.notes||'')}">${esc(t.notes||'—')}</td>
-      <td class="px-3 py-2">
-        <button onclick="deleteTrade(${t.id})" class="btn-danger">✕</button>
+      <td class="px-3 py-2 flex gap-2">
+        <a href="/trade/${t.id}" class="btn-ghost btn-sm">Edit</a>
+        <button onclick="deleteTrade(${t.id})" class="btn-danger btn-sm">✕</button>
       </td>
     </tr>`;
   }).join('');
+  // attach selection listeners
+  document.querySelectorAll('.select-trade-checkbox').forEach(cb => cb.addEventListener('change', updateBulkToolbar));
+  const hdr = document.getElementById('select-all-header'); if (hdr) hdr.checked = false;
 }
 
 function renderStats(trades) {
@@ -689,6 +723,60 @@ function renderStats(trades) {
   const el = document.getElementById('stat-netr');
   el.textContent = `${netR >= 0 ? '+' : ''}${netR.toFixed(2)}R`;
   el.style.color = netR > 0 ? '#4ade80' : netR < 0 ? '#f87171' : '#94a3b8';
+}
+
+function getSelectedIds(){
+  return Array.from(document.querySelectorAll('.select-trade-checkbox:checked')).map(cb=>parseInt(cb.getAttribute('data-id'))).filter(Boolean);
+}
+
+function updateBulkToolbar(){
+  const ids = getSelectedIds();
+  const toolbar = document.getElementById('bulk-toolbar');
+  const count = document.getElementById('bulk-count');
+  if (ids.length) {
+    toolbar.classList.remove('hidden');
+    count.textContent = `${ids.length} selected`;
+  } else {
+    toolbar.classList.add('hidden');
+    count.textContent = '';
+  }
+}
+
+function clearSelection(){ selectAllTrades(false); updateBulkToolbar(); }
+
+function selectAllTrades(val){
+  document.querySelectorAll('.select-trade-checkbox').forEach(cb=>cb.checked = val);
+  const hdr = document.getElementById('select-all-header'); if (hdr) hdr.checked = val;
+  updateBulkToolbar();
+}
+
+function toggleSelectAllHeader(el){
+  const v = !!el.checked; selectAllTrades(v);
+}
+
+async function exportSelected(){
+  const ids = getSelectedIds();
+  if (!ids.length) return toast('Select one or more trades to export', false);
+  // request payload for selected ids (server will also support download via /api/export/file)
+  try {
+    const r = await api('/api/export/selected','POST',{ids});
+    const j = await r.json();
+    if (!r.ok) { return toast(j.error || 'Failed to export selected', false); }
+    document.getElementById('ai-payload').value = j.payload || '';
+    // store ids for server-side download option
+    window.EXPORT_IDS = ids.slice();
+    openModal('ai-modal');
+  } catch (e) { return toast('Export failed: ' + e.message, false); }
+}
+
+async function deleteSelected(){
+  const ids = getSelectedIds();
+  if (!ids.length) return toast('Select one or more trades to delete', false);
+  if (!confirm(`Delete ${ids.length} selected trade(s)? This cannot be undone.`)) return;
+  const r = await api('/api/trades/bulk-delete','POST',{ids});
+  const j = await r.json();
+  if (r.ok) { toast('Deleted selected trades'); await loadTrades(); }
+  else toast(j.error || 'Failed to delete selected', false);
 }
 
 async function deleteTrade(id) {
@@ -774,6 +862,27 @@ const settingsCfg = {
 
 async function loadAllSettings() {
   for (const key of Object.keys(settingsCfg)) await loadSettingList(key);
+  await loadScreenshotStorage();
+}
+
+async function loadScreenshotStorage() {
+  try {
+    const r = await api('/api/settings/screenshot-storage');
+    if (r.ok) {
+      const j = await r.json();
+      const sel = document.getElementById('screenshot-storage');
+      if (sel) sel.value = j.storage || 'local';
+    }
+  } catch(e){}
+}
+
+async function saveScreenshotStorage(){
+  const sel = document.getElementById('screenshot-storage');
+  if (!sel) return;
+  const val = sel.value;
+  const r = await api('/api/settings/screenshot-storage','POST',{storage:val});
+  if (r.ok) { toast('Saved storage setting'); }
+  else { toast('Failed to save', false); }
 }
 
 async function loadSettingList(key) {
@@ -850,6 +959,24 @@ async function copyAIPayload() {
   const text = document.getElementById('ai-payload').value;
   try { await navigator.clipboard.writeText(text); toast('Copied to clipboard!'); }
   catch(e) { document.getElementById('ai-payload').select(); document.execCommand('copy'); toast('Copied!'); }
+}
+
+async function downloadAIPayload(){
+  // If export IDs are set, prefer server-side file download using Flask send_file
+  try {
+    if (window.EXPORT_IDS && window.EXPORT_IDS.length) {
+      const q = window.EXPORT_IDS.join(',');
+      window.location = `/api/export/file?ids=${encodeURIComponent(q)}`;
+      return;
+    }
+    const text = document.getElementById('ai-payload').value || '';
+    const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const fname = `ai_export_${Math.floor(Date.now()/1000)}.txt`;
+    a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast('Exported file: ' + fname, true);
+  } catch (e) { toast('Download failed: ' + e.message, false); }
 }
 
 document.addEventListener('DOMContentLoaded', init);

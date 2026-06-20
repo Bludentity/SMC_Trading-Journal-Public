@@ -37,3 +37,20 @@ Thumbs.db
 
 # Prevent accidental check-in of desktop exe
 *.exe
+
+# User/runtime files
+errors.log
+exports/
+uploads/
+.env.local
+
+# Local database and environment
+smc_backtest.db
+.env
+test_update_trade.py
+test_upload.txt
+exports_test.txt
+exe_check.json
+WhatsApp Image 2026-06-16 at 12.13.23.jpeg
+# Local-only helper scripts and artifacts
+local_tools/

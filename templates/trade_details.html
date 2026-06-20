@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Trade Details</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="p-6 bg-slate-900 text-slate-100">
+  <a href="/" class="text-indigo-300">← Back to Journal</a>
+  <h1 class="text-2xl font-bold mt-4">Trade #{{ trade.id }} — {{ trade.pair }} {{ trade.timeframe }}</h1>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+    <div class="card p-4 lg:col-span-2">
+      <h2 class="font-bold">Edit Trade</h2>
+      <form id="edit-form" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm text-slate-300">Pair</label>
+          <select id="f-pair" class="w-full p-2 rounded bg-slate-800 text-slate-100">
+            {% for p in pairs %}
+              <option value="{{ p }}" {% if p==trade.pair %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Timeframe</label>
+          <select id="f-tf" class="w-full p-2 rounded bg-slate-800 text-slate-100">
+            {% for tf in timeframes %}
+              <option value="{{ tf }}" {% if tf==trade.timeframe %}selected{% endif %}>{{ tf }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Direction</label>
+          <select id="f-direction" class="w-full p-2 rounded bg-slate-800 text-slate-100">
+            <option value="Bullish" {% if trade.direction=='Bullish' %}selected{% endif %}>Bullish / Long</option>
+            <option value="Bearish" {% if trade.direction=='Bearish' %}selected{% endif %}>Bearish / Short</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Session</label>
+          <select id="f-session" class="w-full p-2 rounded bg-slate-800 text-slate-100">
+            {% for s in sessions %}
+              <option value="{{ s }}" {% if s==trade.session %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Execution Time (EAT)</label>
+          <input id="f-exec-time" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.execution_time_eat }}" />
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Outcome</label>
+          <select id="f-outcome" class="w-full p-2 rounded bg-slate-800 text-slate-100">
+            {% for o in outcomes %}
+              <option value="{{ o }}" {% if o==trade.outcome %}selected{% endif %}>{{ o }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Planned SL (pips)</label>
+          <input id="f-sl" type="number" step="0.1" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.planned_sl_pips }}" />
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Planned TP (pips)</label>
+          <input id="f-tp" type="number" step="0.1" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.planned_tp_pips }}" />
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Planned R:R</label>
+          <input id="f-rr" type="number" step="0.01" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.planned_rr }}" />
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Exact Entry Price</label>
+          <input id="f-entry-px" type="number" step="0.00001" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.exact_entry_price or '' }}" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Exact SL Price</label>
+          <input id="f-sl-px" type="number" step="0.00001" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.exact_sl_price or '' }}" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Exact TP Price</label>
+          <input id="f-tp-px" type="number" step="0.00001" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.exact_tp_price or '' }}" />
+        </div>
+
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">Entry Modules (hold Ctrl/Cmd to select multiple)</label>
+          <select id="f-entry-modules" multiple size="5" class="w-full p-2 rounded bg-slate-800 text-slate-100 overflow-auto">
+            {% for m in modules %}
+              <option value="{{ m.module_name }}" {% if m.module_name in (trade.entry_modules | fromjson) %}selected{% endif %}>{{ m.module_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">Dynamic Entry Zones</label>
+          <div id="f-dynamic-zones-container" class="space-y-2"></div>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Actual Reversal Zone</label>
+          <select id="f-actual-reversal-zone" class="w-full p-2 rounded bg-slate-800 text-slate-100 max-h-44 overflow-y-auto">
+            <option value="">N/A</option>
+            {% for lv in levels %}
+              <option value="{{ lv.level_name }}" {% if lv.level_name==trade.actual_reversal_zone %}selected{% endif %}>{{ lv.level_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Custom Reversal (text)</label>
+          <input id="f-actual-reversal-custom" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.actual_reversal_custom or '' }}" />
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Reversal Level</label>
+          <select id="f-reversal-level" class="w-full p-2 rounded bg-slate-800 text-slate-100 max-h-44 overflow-y-auto">
+            <option value="">N/A</option>
+            {% for lv in levels %}
+              <option value="{{ lv.level_name }}" {% if lv.level_name==trade.reversal_level %}selected{% endif %}>{{ lv.level_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Actual MAE (pips)</label>
+          <input id="f-mae" type="number" step="0.1" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.actual_mae_pips or '' }}" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Actual MFE (pips)</label>
+          <input id="f-mfe" type="number" step="0.1" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.actual_mfe_pips or '' }}" />
+        </div>
+
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">SL Placement Description</label>
+          <input id="f-sl-desc" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.sl_placement_desc or '' }}" />
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">TP Placement Description</label>
+          <input id="f-tp-desc" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.tp_placement_desc or '' }}" />
+        </div>
+
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">Entry & Reversal Notes</label>
+          <textarea id="f-entry-notes" class="w-full p-2 rounded bg-slate-800 text-slate-100" rows="3">{{ trade.entry_reversal_notes or '' }}</textarea>
+        </div>
+
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-300">Final Notes</label>
+          <textarea id="f-notes" class="w-full p-2 rounded bg-slate-800 text-slate-100" rows="3">{{ trade.notes or '' }}</textarea>
+        </div>
+
+        <div>
+          <label class="block text-sm text-slate-300">Net R</label>
+          <input id="f-netr" type="number" step="0.01" class="w-full p-2 rounded bg-slate-800 text-slate-100" value="{{ trade.net_r }}" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Created At</label>
+          <input id="f-created-at" class="w-full p-2 rounded bg-slate-800 text-slate-400" value="{{ trade.created_at }}" readonly />
+        </div>
+
+        <div class="md:col-span-2 flex gap-2">
+          <button type="button" onclick="saveEdit()" class="btn-primary">Save Changes</button>
+          <a href="/api/export/file" class="btn-cyan">Export AI File</a>
+        </div>
+      </form>
+    </div>
+
+    <div class="card p-4">
+      <h2 class="font-bold">Screenshots</h2>
+          <div id="screens-list" class="mt-3 space-y-2">
+        {% for s in screenshots %}
+          <div class="p-2 bg-slate-800 rounded flex items-center justify-between">
+            <div>
+              <a href="/api/trades/{{ trade.id }}/screenshot/{{ s.id }}" class="text-indigo-300" target="_blank">{{ s.filename }}</a>
+              <div class="text-xs text-slate-400">{{ s.created_at }}</div>
+            </div>
+                <div class="flex gap-2">
+                  <button onclick="deleteScreenshot({{ s.id }})" class="btn-danger btn-sm">Delete</button>
+                </div>
+          </div>
+        {% else %}
+          <div class="text-slate-500">No screenshots uploaded.</div>
+        {% endfor %}
+      </div>
+      <form id="upload-form" class="mt-3" enctype="multipart/form-data">
+        <input type="file" id="file-input" name="file" />
+        <button type="button" onclick="uploadScreenshot()" class="btn-primary ml-2">Upload</button>
+      </form>
+    </div>
+  </div>
+
+<script>
+async function saveEdit(){
+  const modules = Array.from(document.getElementById('f-entry-modules').selectedOptions).map(o=>o.value);
+  // build dynamic entry zones from the select inputs; treat 'N/A' as no value
+  let zones = {};
+  try {
+    const selects = Array.from(document.querySelectorAll('#f-dynamic-zones-container select[data-module]'));
+    selects.forEach(s => {
+      const mod = s.getAttribute('data-module');
+      const val = s.value;
+      if (val && val !== 'N/A') zones[mod] = val;
+    });
+    if (Object.keys(zones).length === 0) zones = null;
+  } catch (e) { zones = null; }
+  const payload = {
+    pair: document.getElementById('f-pair').value,
+    timeframe: document.getElementById('f-tf').value,
+    direction: document.getElementById('f-direction').value,
+    session: document.getElementById('f-session').value || null,
+    execution_time: document.getElementById('f-exec-time').value,
+    entry_modules: modules,
+    dynamic_entry_zones: zones,
+    actual_reversal_zone: document.getElementById('f-actual-reversal-zone').value || null,
+    actual_reversal_custom: document.getElementById('f-actual-reversal-custom').value || null,
+    reversal_level: document.getElementById('f-reversal-level').value || null,
+    outcome: document.getElementById('f-outcome').value,
+    planned_sl_pips: document.getElementById('f-sl').value,
+    planned_tp_pips: document.getElementById('f-tp').value,
+    planned_rr: document.getElementById('f-rr').value,
+    exact_entry_price: document.getElementById('f-entry-px').value || null,
+    exact_sl_price: document.getElementById('f-sl-px').value || null,
+    exact_tp_price: document.getElementById('f-tp-px').value || null,
+    actual_mae_pips: document.getElementById('f-mae').value || null,
+    actual_mfe_pips: document.getElementById('f-mfe').value || null,
+    sl_placement_desc: document.getElementById('f-sl-desc').value || null,
+    tp_placement_desc: document.getElementById('f-tp-desc').value || null,
+    entry_reversal_notes: document.getElementById('f-entry-notes').value || null,
+    notes: document.getElementById('f-notes').value || null,
+    net_r: document.getElementById('f-netr').value || null,
+  };
+  const res = await fetch('/api/trades/{{ trade.id }}', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  if (res.ok) { toast('Saved', true); setTimeout(()=>location.reload(),300); }
+  else { toast('Failed to save', false); }
+}
+async function uploadScreenshot(){
+  const f = document.getElementById('file-input').files[0];
+  if (!f) return toast('Choose a file', false);
+  const fd = new FormData(); fd.append('file', f);
+  const res = await fetch('/api/trades/{{ trade.id }}/screenshot', {method:'POST', body:fd});
+  if (res.status===201) { toast('Uploaded', true); setTimeout(()=>location.reload(),300); }
+  else { try{ const j=await res.json(); toast('Upload failed: ' + (j.error||res.status), false); }catch(e){ toast('Upload failed', false);} }
+}
+
+async function deleteScreenshot(sid){
+  if (!confirm('Delete this screenshot?')) return;
+  const r = await fetch(`/api/trades/{{ trade.id }}/screenshot/${sid}`, {method:'DELETE'});
+  if (r.ok) { toast('Deleted', true); setTimeout(()=>location.reload(),300); }
+  else { toast('Delete failed', false); }
+}
+
+// build dynamic entry zones on page load
+document.addEventListener('DOMContentLoaded', ()=>{
+  try{
+    const levels = {{ levels|tojson }};
+    const existingZones = {};
+    try { Object.assign(existingZones, JSON.parse({{ (trade.dynamic_entry_zones or '{}')|tojson }})); } catch(e) {}
+    const selMods = Array.from(document.getElementById('f-entry-modules').selectedOptions).map(o=>o.value);
+    const container = document.getElementById('f-dynamic-zones-container');
+    container.innerHTML = '';
+    if (selMods.length){
+      selMods.forEach(m=>{
+        const row = document.createElement('div'); row.className='zone-row';
+        const lbl = document.createElement('label'); lbl.textContent = m; lbl.title = m;
+        const sel = document.createElement('select'); sel.setAttribute('data-module', m); sel.className='p-2 rounded bg-slate-800 text-slate-100';
+        const optNa = document.createElement('option'); optNa.value='N/A'; optNa.textContent='N/A'; sel.appendChild(optNa);
+        levels.forEach(l=>{ const o=document.createElement('option'); o.value=l.level_name; o.textContent=l.level_name; if (existingZones[m]==l.level_name) o.selected=true; sel.appendChild(o); });
+        row.appendChild(lbl); row.appendChild(sel); container.appendChild(row);
+      });
+    }
+  }catch(e){/* ignore */}
+});
+</script>
+</body>
+</html>
